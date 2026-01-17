@@ -373,10 +373,10 @@ Listens for transaction.posted or transaction.failed events to alert the user.
 
     docker-compose up -d
 
-    Run Services You can run each microservice via Gradle/Maven or as Docker containers.
+    Run Services You can run each microservice via Maven or as Docker containers.
     Bash
 
-    ./gradlew bootRun
+    ./mvnw spring-boot:run
 
 ### Future Improvements
 
