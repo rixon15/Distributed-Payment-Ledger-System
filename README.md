@@ -429,7 +429,7 @@ Listens for transaction.posted or transaction.failed events to alert the user.
     GW -- Validate JWT --> GW_Cache
     Auth --> AuthDB & AuthRedis
     Payment -- Atomic Lock (SETNX) --> PayRedis
-    Ledger -- Pessimistic Locking<br>(SELECT FOR UPDATE) --> LedgerDB
+    Ledger -- Optimistic Locking --> LedgerDB
     User -- "1. HTTPS / REST" --> GW
     GW -. "2. Login / Refresh" .-> Auth
     GW -- "3. Proxy Request (Bearer Token)" --> Payment
