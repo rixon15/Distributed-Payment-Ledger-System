@@ -243,18 +243,23 @@ POSTINGS	Immutable record of math (Debit/Credit pairs).
     ACCOUNTS {
         uuid id PK
         uuid user_id
+        string name
+        sting type
         decimal balance "Updated inside the lock"
         string currency
+        int version
         timestamp updated_at
     }
 
     %% Immutable Journal
     TRANSACTIONS {
-        uuid id PK "Idempotency Key"
-        string reference_id
+        uuid id PK 
+        string reference_id "Idempotency Key"
         string type
         string description
         timestamp created_at
+        timestamp effective_date
+        string metadata
         string status
     }
 
