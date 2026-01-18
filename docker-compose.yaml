@@ -6,7 +6,7 @@ services:
     ports:
       - "${POSTGRES_HOST_PORT}:5432"
     environment:
-      POSTGRES_USER: ${POSTGRES_USEr:-user}
+      POSTGRES_USER: ${POSTGRES_USER:-user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
     volumes:
       - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
