@@ -43,11 +43,11 @@ flowchart TB
 
 2. Financial Integrity
 
-    Pessimistic Locking: The Ledger Service uses SELECT ... FOR UPDATE to physically lock database rows during a transaction, preventing race conditions.
+    Optimistic Concurrency Control: The Ledger Service uses a versioning mechanism (e.g., version column or eTag) to manage updates. Transactions verify that the record has not been modified by another process since it was read. If a version mismatch occurs, the transaction is rejected and must be retried.
 
-    Deadlock Prevention: Locks are always acquired in a deterministic order (lowest UUID first) to prevent database deadlocks.
+    Conflict Resolution: Instead of physical database locks, the system relies on atomic "Compare-and-Swap" (CAS) operations. This eliminates database-level deadlocks and significantly increases throughput during low-to-medium contention.
 
-    Double-Entry Accounting: Every transaction is recorded as two immutable postings (Debit & Credit) where ∑Amount=0.
+    Double-Entry Accounting: Every transaction is recorded as two immutable postings (Debit & Credit) where $\sum \text{Amount} = 0$.
 
 3. Distributed Resiliency
 
@@ -239,7 +239,7 @@ POSTINGS	Immutable record of math (Debit/Credit pairs).
 
 ```mermaid
     erDiagram
-    %% Snapshot Table (Locked via SELECT FOR UPDATE)
+    %% Snapshot Table
     ACCOUNTS {
         uuid id PK
         uuid user_id
@@ -277,7 +277,7 @@ POSTINGS	Immutable record of math (Debit/Credit pairs).
 ```
 ```mermaid
     sequenceDiagram
-    title Ledger Service: Concurrency & Deadlock Prevention
+    title Ledger Service: Optimistic Concurrency (CAS)
     participant Kafka
     participant Service as Ledger Worker
     participant DB as Postgres
@@ -285,36 +285,47 @@ POSTINGS	Immutable record of math (Debit/Credit pairs).
     Kafka->>Service: Consume: transfer.initiated (From: A, To: B, ID: 123)
     activate Service
     
-    Note over Service, DB: DB Transaction Starts (BEGIN)
-    
-    Note right of Service: 1. Idempotency Check
-    Service->>DB: INSERT INTO handled_events (event_id) VALUES (123)
-    
-    alt Insert Fails (Duplicate)
-        DB-->>Service: Error: Unique Constraint Violation
-        Service->>DB: ROLLBACK
-        Service->>Kafka: Ack (Ignore Duplicate)
-    else Insert Success
+    loop Retry Strategy (e.g., Max 3 attempts)
+        Note over Service, DB: DB Transaction Starts (BEGIN)
         
-        Note right of Service: 2. Deterministic Locking (Avoid Deadlock)
-        Note right of Service: Sort IDs: Lock Lowest ID First
+        Note right of Service: 1. Idempotency Check
+        Service->>DB: INSERT INTO handled_events (event_id) VALUES (123)
         
-        Service->>DB: SELECT balance FROM accounts WHERE id=A FOR UPDATE
-        Service->>DB: SELECT balance FROM accounts WHERE id=B FOR UPDATE
-        
-        DB-->>Service: Return Balances
-        
-        Service->>Service: Check Balance (A >= Amount)
-        
-        alt Sufficient Funds
-            Service->>DB: INSERT into postings (Debit A, Credit B)...
-            Service->>DB: UPDATE accounts SET balance = A - Amount
-            Service->>DB: UPDATE accounts SET balance = B + Amount
-            Service->>DB: COMMIT
-            Service->>Kafka: Publish: transaction.posted
-        else Insufficient Funds
+        alt Insert Fails (Duplicate)
+            DB-->>Service: Error: Unique Constraint Violation
             Service->>DB: ROLLBACK
-            Service->>Kafka: Publish: transaction.failed
+            Service->>Kafka: Ack (Ignore Duplicate)
+            Note right of Service: Break Loop
+        else Insert Success
+            
+            Note right of Service: 2. Snapshot Read (No Locks)
+            Service->>DB: SELECT balance, version FROM accounts WHERE id IN (A, B)
+            DB-->>Service: Return: {A: $100, v1}, {B: $50, v5}
+            
+            Service->>Service: Check Balance (A >= Amount)
+            
+            alt Sufficient Funds
+                Service->>DB: INSERT into postings (Debit A, Credit B)...
+                
+                Note right of Service: 3. Conditional Update (CAS)
+                Service->>DB: UPDATE accounts SET bal=A-Amt, ver=v1+1 WHERE id=A AND ver=v1
+                Service->>DB: UPDATE accounts SET bal=B+Amt, ver=v5+1 WHERE id=B AND ver=v5
+                
+                alt Any Update Returns 0 Rows
+                    Note right of Service: Version Mismatch (Conflict)
+                    Service->>DB: ROLLBACK
+                    Service->>Service: Sleep (Jitter) & Continue Loop
+                else Both Updates Return 1 Row
+                    Service->>DB: COMMIT
+                    Service->>Kafka: Publish: transaction.posted
+                    Note right of Service: Break Loop (Success)
+                end
+
+            else Insufficient Funds
+                Service->>DB: ROLLBACK
+                Service->>Kafka: Publish: transaction.failed
+                Note right of Service: Break Loop
+            end
         end
     end
     deactivate Service
