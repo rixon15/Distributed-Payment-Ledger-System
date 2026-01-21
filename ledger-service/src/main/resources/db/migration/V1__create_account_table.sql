@@ -1,7 +1,7 @@
 CREATE TABLE accounts
 (
     id         UUID PRIMARY KEY,
-    user_id    UUID,
+    user_id    UUID           NOT NULL,
     name       VARCHAR(255)   NOT NULL,
     type       VARCHAR(20)    NOT NULL,
     currency   VARCHAR(3)     NOT NULL,                 -- ISO 4217 (USD, EUR, etc.)
