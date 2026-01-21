@@ -225,7 +225,7 @@ Handles the "Authorization" phase. It talks to the external world (Bank Simulato
 
 The heart of the system. It consumes events and updates balances.
 
-    Pattern: Event Sourcing (Lite) / Pessimistic Locking.
+    Pattern: Event Sourcing (Lite) / Optimistic Locking.
 
     Schema: Implements a strict Double-Entry schema.
 
