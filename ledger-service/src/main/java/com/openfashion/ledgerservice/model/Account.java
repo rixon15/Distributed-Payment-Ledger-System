@@ -44,6 +44,10 @@ public class Account {
     @Version
     private long version;
 
+    @Column(nullable = false, length = 20)
+    @Enumerated(EnumType.STRING)
+    private AccountStatus status = AccountStatus.ACTIVE;
+
     @CreationTimestamp
     @Column(updatable = false)
     private Instant createdAt;

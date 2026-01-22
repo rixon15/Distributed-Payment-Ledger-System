@@ -2,7 +2,10 @@ package com.openfashion.ledgerservice.model;
 
 import jakarta.persistence.*;
 import jakarta.validation.constraints.Digits;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.util.UUID;
@@ -13,6 +16,9 @@ import java.util.UUID;
         @Index(name = "idx_postings_transaction_id", columnList = "transaction_id")
 })
 @Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
 public class Posting {
 
     @Id

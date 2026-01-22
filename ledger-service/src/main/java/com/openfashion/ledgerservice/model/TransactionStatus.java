@@ -1,6 +1,6 @@
 package com.openfashion.ledgerservice.model;
 
-public enum Status {
+public enum TransactionStatus {
     PENDING,
     POSTED,
     REJECTED_NSF, // Non-Sufficient Funds
