@@ -26,9 +26,11 @@ public class Transaction {
     private String referenceId;
 
     @Column(nullable = false, length = 50)
+    @Enumerated(EnumType.STRING)
     private TransactionType type;
 
     @Column(nullable = false, length = 20)
+    @Enumerated(EnumType.STRING)
     private TransactionStatus status;
 
     @Column(columnDefinition = "TEXT")

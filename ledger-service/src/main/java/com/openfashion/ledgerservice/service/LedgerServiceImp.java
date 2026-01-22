@@ -35,15 +35,17 @@ public class LedgerServiceImp implements LedgerService {
     private final PostingRepository postingRepository;
 
 
-    @Transactional(isolation = Isolation.READ_COMMITTED)
+    @Transactional(isolation = Isolation.SERIALIZABLE)
     @Retryable(
             retryFor = OptimisticLockingFailureException.class,
             maxAttempts = 4,
             backoff = @Backoff(delay = 50, multiplier = 2))
     public void processTransaction(TransactionRequest request) {
 
+        validateRequest(request);
+
         long start = System.currentTimeMillis();
-        log.info("Processing transaction: {}", request.getReceiverId());
+        log.info("Processing transaction with referencId: {}", request.getReceiverId());
 
         if (transactionRepository.existsByReferenceId(request.getReferenceId())) {
             log.warn("Idempotency Triggered: Transaction {} already processed.", request.getReferenceId());
@@ -101,9 +103,12 @@ public class LedgerServiceImp implements LedgerService {
 
             transaction.setStatus(TransactionStatus.REJECTED_INACTIVE);
             transactionRepository.save(transaction);
-            return; // STOP HERE
+            return;
         }
 
+        // We ONLY enforce NSF checks on User ASSET accounts.
+        // - System Accounts (EQUITY, INCOME, EXPENSE) are unbounded by design (e.g. World Liquidity must go negative to mint money).
+        // - LIABILITY accounts (Credit Cards) would require a different check (Credit Limit), not a Zero-Floor check.
         if (debitAccount.getType() == AccountType.ASSET && debitAccount.getBalance().compareTo(request.getAmount()) < 0) {
             transaction.setStatus(TransactionStatus.REJECTED_NSF);
             transactionRepository.save(transaction);
@@ -122,10 +127,10 @@ public class LedgerServiceImp implements LedgerService {
 
         transaction.setStatus(TransactionStatus.POSTED);
 
-        transactionRepository.save(transaction);
-        postingRepository.saveAll(postings);
         accountRepository.save(debitAccount);
         accountRepository.save(creditAccount);
+        transactionRepository.save(transaction);
+        postingRepository.saveAll(postings);
 
         log.info("Transaction {} processed successfully in {} ms", request.getReferenceId(), System.currentTimeMillis() - start);
 
@@ -150,4 +155,20 @@ public class LedgerServiceImp implements LedgerService {
         return accountRepository.findByNameAndCurrency(name, currency)
                 .orElseThrow(() -> new MissingSystemAccountException(name));
     }
+    private void validateRequest(TransactionRequest request) {
+        if (request.getType() == null) {
+            throw new UnsupportedTransactionException("Transaction Type is missing");
+        }
+
+        if (request.getType() != TransactionType.DEPOSIT && request.getSenderId() == null) {
+                throw new IllegalArgumentException("Sender ID is required for " + request.getType());
+            }
+
+
+        if (request.getType() != TransactionType.WITHDRAWAL && request.getType() != TransactionType.FEE && request.getReceiverId() == null) {
+                throw new IllegalArgumentException("Receiver ID is required for " + request.getType());
+            }
+
+    }
+
 }

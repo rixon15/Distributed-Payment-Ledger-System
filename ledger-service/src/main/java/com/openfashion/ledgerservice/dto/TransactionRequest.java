@@ -17,7 +17,6 @@ public class TransactionRequest {
     @NotNull(message = "Transaction Type is required")
     private TransactionType type;
     private UUID senderId;
-    @NotNull(message = "Receiver ID is required")
     private UUID receiverId;
     @NotNull(message = "Amount is required")
     @Positive(message = "Amount must be greater than zero")
