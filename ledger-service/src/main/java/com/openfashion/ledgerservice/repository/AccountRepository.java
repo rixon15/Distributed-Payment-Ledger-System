@@ -12,5 +12,6 @@ import java.util.UUID;
 public interface AccountRepository extends JpaRepository<Account, UUID> {
 
     Optional<Account> findByUserIdAndCurrency(UUID userId, CurrencyType currency);
+    Optional<Account> findByNameAndCurrency(String name, CurrencyType currency);
 
 }
