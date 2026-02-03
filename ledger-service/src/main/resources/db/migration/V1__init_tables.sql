@@ -25,15 +25,27 @@ CREATE TABLE postings
 
 CREATE TABLE transactions
 (
-    id             UUID         NOT NULL,
-    reference_id   VARCHAR(255) NOT NULL,
-    type           VARCHAR(20)  NOT NULL,
-    status         VARCHAR(20)  NOT NULL,
+    id             UUID                     NOT NULL,
+    reference_id   VARCHAR(255)             NOT NULL,
+    type           VARCHAR(20)              NOT NULL,
+    status         VARCHAR(20)              NOT NULL,
     metadata       TEXT,
     effective_date TIMESTAMP WITH TIME ZONE NOT NULL,
     created_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT pk_transactions PRIMARY KEY (id)
 );
+
+CREATE TABLE outbox_events
+(
+    id           UUID PRIMARY KEY,
+    aggregate_id VARCHAR(255) NOT NULL,
+    event_type   VARCHAR(50)  NOT NULL,
+    payload      JSONB        NOT NULL,
+    created_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    status       VARCHAR(20)              DEFAULT 'PENDING'
+);
+
+CREATE INDEX idx_outbox_status ON outbox_events (status, created_at);
 
 ALTER TABLE accounts
     ADD CONSTRAINT uc_accounts_user_id_currency UNIQUE (user_id, currency);

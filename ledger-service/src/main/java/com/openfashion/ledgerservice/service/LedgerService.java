@@ -1,4 +1,4 @@
-package com.openfashion.ledgerservice.service.imp;
+package com.openfashion.ledgerservice.service;
 
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 

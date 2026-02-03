@@ -1,15 +1,18 @@
-package com.openfashion.ledgerservice.service;
+package com.openfashion.ledgerservice.service.imp;
 
 import com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException;
 import com.openfashion.ledgerservice.core.exceptions.MissingSystemAccountException;
 import com.openfashion.ledgerservice.core.exceptions.UnsupportedTransactionException;
 import com.openfashion.ledgerservice.core.util.MoneyUtil;
+import com.openfashion.ledgerservice.model.OutboxEvent;
+import com.openfashion.ledgerservice.dto.OutboxStatus;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.model.*;
 import com.openfashion.ledgerservice.repository.AccountRepository;
+import com.openfashion.ledgerservice.repository.OutboxRepository;
 import com.openfashion.ledgerservice.repository.PostingRepository;
 import com.openfashion.ledgerservice.repository.TransactionRepository;
-import com.openfashion.ledgerservice.service.imp.LedgerService;
+import com.openfashion.ledgerservice.service.LedgerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -18,6 +21,8 @@ import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -33,6 +38,9 @@ public class LedgerServiceImp implements LedgerService {
     private final AccountRepository accountRepository;
     private final TransactionRepository transactionRepository;
     private final PostingRepository postingRepository;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final OutboxRepository outboxRepository;
+    private static final String FAILED_TRANSACTION = "transaction.failed";
 
 
     @Transactional(isolation = Isolation.SERIALIZABLE)
@@ -45,7 +53,7 @@ public class LedgerServiceImp implements LedgerService {
         validateRequest(request);
 
         long start = System.currentTimeMillis();
-        log.info("Processing transaction with referencId: {}", request.getReceiverId());
+        log.info("Processing transaction with referencId: {}", request.getReferenceId());
 
         if (transactionRepository.existsByReferenceId(request.getReferenceId())) {
             log.warn("Idempotency Triggered: Transaction {} already processed.", request.getReferenceId());
@@ -88,21 +96,13 @@ public class LedgerServiceImp implements LedgerService {
                 .metadata(request.getMetadata())
                 .build();
 
-        if (debitAccount.getStatus() != AccountStatus.ACTIVE) {
-            log.warn("Transaction {} rejected: Debit account {} is {}",
-                    request.getReferenceId(), debitAccount.getId(), debitAccount.getStatus());
+        if (debitAccount.getStatus() != AccountStatus.ACTIVE || creditAccount.getStatus() != AccountStatus.ACTIVE) {
+            log.warn("Transaction {} rejected: Account inactive", request.getReferenceId());
 
             transaction.setStatus(TransactionStatus.REJECTED_INACTIVE);
             transactionRepository.save(transaction);
-            return;
-        }
 
-        if (creditAccount.getStatus() != AccountStatus.ACTIVE) {
-            log.warn("Transaction {} rejected: Credit account {} is {}",
-                    request.getReferenceId(), creditAccount.getId(), creditAccount.getStatus());
-
-            transaction.setStatus(TransactionStatus.REJECTED_INACTIVE);
-            transactionRepository.save(transaction);
+            saveOutboxEvent(transaction, FAILED_TRANSACTION);
             return;
         }
 
@@ -114,6 +114,7 @@ public class LedgerServiceImp implements LedgerService {
             transactionRepository.save(transaction);
             log.info("Transaction rejected (NSF): {}", request.getReferenceId());
 
+            saveOutboxEvent(transaction, FAILED_TRANSACTION);
             return;
         }
 
@@ -131,6 +132,8 @@ public class LedgerServiceImp implements LedgerService {
         accountRepository.save(creditAccount);
         transactionRepository.save(transaction);
         postingRepository.saveAll(postings);
+
+        saveOutboxEvent(transaction, "transaction.posted");
 
         log.info("Transaction {} processed successfully in {} ms", request.getReferenceId(), System.currentTimeMillis() - start);
 
@@ -155,19 +158,41 @@ public class LedgerServiceImp implements LedgerService {
         return accountRepository.findByNameAndCurrency(name, currency)
                 .orElseThrow(() -> new MissingSystemAccountException(name));
     }
+
     private void validateRequest(TransactionRequest request) {
         if (request.getType() == null) {
             throw new UnsupportedTransactionException("Transaction Type is missing");
         }
 
         if (request.getType() != TransactionType.DEPOSIT && request.getSenderId() == null) {
-                throw new IllegalArgumentException("Sender ID is required for " + request.getType());
-            }
+            throw new IllegalArgumentException("Sender ID is required for " + request.getType());
+        }
 
 
         if (request.getType() != TransactionType.WITHDRAWAL && request.getType() != TransactionType.FEE && request.getReceiverId() == null) {
-                throw new IllegalArgumentException("Receiver ID is required for " + request.getType());
-            }
+            throw new IllegalArgumentException("Receiver ID is required for " + request.getType());
+        }
+
+    }
+
+    private void saveOutboxEvent(Transaction transaction, String eventType) {
+
+        try {
+            String jsonPayload = objectMapper.writeValueAsString(transaction);
+
+            OutboxEvent outboxEvent = OutboxEvent.builder()
+                    .aggregateId(transaction.getReferenceId())
+                    .eventType(eventType)
+                    .payload(jsonPayload)
+                    .status(OutboxStatus.PENDING)
+                    .createdAt(Instant.now())
+                    .build();
+
+            outboxRepository.save(outboxEvent);
+        } catch (JacksonException e) {
+            log.error("Failed to serialize transaction for outbox", e);
+            throw new RuntimeException("Serialization failure", e);
+        }
 
     }
 
