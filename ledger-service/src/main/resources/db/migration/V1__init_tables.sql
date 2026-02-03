@@ -45,7 +45,7 @@ CREATE TABLE outbox_events
     status       VARCHAR(20)              DEFAULT 'PENDING'
 );
 
-CREATE INDEX idx_outbox_status ON outbox_events (status);
+CREATE INDEX idx_outbox_status ON outbox_events (status, created_at);
 
 ALTER TABLE accounts
     ADD CONSTRAINT uc_accounts_user_id_currency UNIQUE (user_id, currency);
