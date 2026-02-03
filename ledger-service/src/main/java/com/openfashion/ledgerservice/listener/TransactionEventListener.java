@@ -41,8 +41,7 @@ public class TransactionEventListener {
 
             acknowledgment.acknowledge();
         } catch (Exception e) {
-            log.error("Error processing transaction event: {}", event.referenceId());
-            throw e;
+            log.error("Error processing transaction event: {}", event.referenceId(), e);
         }
     }
 

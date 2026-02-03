@@ -4,7 +4,7 @@ import com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException;
 import com.openfashion.ledgerservice.core.exceptions.MissingSystemAccountException;
 import com.openfashion.ledgerservice.core.exceptions.UnsupportedTransactionException;
 import com.openfashion.ledgerservice.core.util.MoneyUtil;
-import com.openfashion.ledgerservice.dto.OutboxEvent;
+import com.openfashion.ledgerservice.model.OutboxEvent;
 import com.openfashion.ledgerservice.dto.OutboxStatus;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.model.*;

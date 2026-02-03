@@ -1,6 +1,6 @@
 package com.openfashion.ledgerservice.scheduler;
 
-import com.openfashion.ledgerservice.dto.OutboxEvent;
+import com.openfashion.ledgerservice.model.OutboxEvent;
 import com.openfashion.ledgerservice.dto.OutboxStatus;
 import com.openfashion.ledgerservice.repository.OutboxRepository;
 import jakarta.transaction.Transactional;
@@ -23,7 +23,7 @@ public class OutboxPoller {
     @Scheduled(fixedDelay = 2000)
     @Transactional
     public void processOutboxEvent() {
-        List<OutboxEvent> events = outboxRepository.findTop50ByStatusOrderByCreatedAtAsc(OutboxStatus.PENDING);
+        List<OutboxEvent> events = outboxRepository.findTop50ForProcessing();
 
         if(events.isEmpty()) return;
 
@@ -33,13 +33,14 @@ public class OutboxPoller {
             try {
                 kafkaTemplate.send(event.getEventType(), event.getAggregateId(), event.getPayload());
 
-                event.setStatus(OutboxStatus.PROCESSED);
                 outboxRepository.save(event);
 
                 log.debug("Successfully published event {} to topic {}", event.getId(), event.getEventType());
             } catch (Exception e) {
                 log.error("Failed to publish outbox event {}:{}", event.getId(), e.getMessage());
             }
+
+            event.setStatus(OutboxStatus.PROCESSED);
         }
     }
 

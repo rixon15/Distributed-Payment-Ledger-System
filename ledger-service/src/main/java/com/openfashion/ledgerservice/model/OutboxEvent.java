@@ -1,5 +1,6 @@
-package com.openfashion.ledgerservice.dto;
+package com.openfashion.ledgerservice.model;
 
+import com.openfashion.ledgerservice.dto.OutboxStatus;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -29,7 +30,7 @@ public class OutboxEvent {
     @Column(nullable = false)
     private String eventType;
 
-    @Column(columnDefinition = "jsonb")
+    @Column(columnDefinition = "jsonb", nullable = false)
     @JdbcTypeCode(SqlTypes.JSON)
     private String payload;
 
@@ -37,5 +38,6 @@ public class OutboxEvent {
     @Enumerated(EnumType.STRING)
     private OutboxStatus status;
 
+    @Column(nullable = false)
     private Instant createdAt;
 }
