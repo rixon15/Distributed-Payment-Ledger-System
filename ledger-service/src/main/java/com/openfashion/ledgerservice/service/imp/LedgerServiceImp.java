@@ -1,6 +1,5 @@
 package com.openfashion.ledgerservice.service.imp;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException;
 import com.openfashion.ledgerservice.core.exceptions.MissingSystemAccountException;
 import com.openfashion.ledgerservice.core.exceptions.UnsupportedTransactionException;
@@ -41,7 +40,7 @@ public class LedgerServiceImp implements LedgerService {
     private final PostingRepository postingRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final OutboxRepository outboxRepository;
-    private static final String failedTransaction = "transaction.failed";
+    private static final String FAILED_TRANSACTION = "transaction.failed";
 
 
     @Transactional(isolation = Isolation.SERIALIZABLE)
@@ -103,7 +102,7 @@ public class LedgerServiceImp implements LedgerService {
             transaction.setStatus(TransactionStatus.REJECTED_INACTIVE);
             transactionRepository.save(transaction);
 
-            saveOutboxEvent(transaction, failedTransaction);
+            saveOutboxEvent(transaction, FAILED_TRANSACTION);
             return;
         }
 
@@ -115,7 +114,7 @@ public class LedgerServiceImp implements LedgerService {
             transactionRepository.save(transaction);
             log.info("Transaction rejected (NSF): {}", request.getReferenceId());
 
-            saveOutboxEvent(transaction, failedTransaction);
+            saveOutboxEvent(transaction, FAILED_TRANSACTION);
             return;
         }
 
@@ -134,7 +133,7 @@ public class LedgerServiceImp implements LedgerService {
         transactionRepository.save(transaction);
         postingRepository.saveAll(postings);
 
-        saveOutboxEvent(transaction, failedTransaction);
+        saveOutboxEvent(transaction, "transaction.posted");
 
         log.info("Transaction {} processed successfully in {} ms", request.getReferenceId(), System.currentTimeMillis() - start);
 
