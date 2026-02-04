@@ -7,6 +7,7 @@ import com.openfashion.ledgerservice.repository.OutboxRepository;
 import com.openfashion.ledgerservice.repository.PostingRepository;
 import com.openfashion.ledgerservice.repository.TransactionRepository;
 import com.openfashion.ledgerservice.service.LedgerService;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -18,7 +19,6 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
-import org.testcontainers.shaded.org.awaitility.Awaitility;
 import org.testcontainers.utility.DockerImageName;
 
 import java.math.BigDecimal;
@@ -29,7 +29,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -61,9 +60,9 @@ class LedgerServiceIntegrationTest {
     @BeforeEach
     void cleanDb() {
         postingRepository.deleteAll();
-        accountRepository.deleteAll();
         outboxRepository.deleteAll();
         transactionRepository.deleteAll();
+        accountRepository.deleteAll();
 
         // Always setup a System Account for Deposit tests
         setupAccount(null, "WORLD_LIQUIDITY", AccountType.EQUITY, BigDecimal.ZERO);
@@ -105,8 +104,6 @@ class LedgerServiceIntegrationTest {
         int threads = 2;
         ExecutorService executor = Executors.newFixedThreadPool(threads);
         CountDownLatch latch = new CountDownLatch(1);
-        AtomicInteger successCount = new AtomicInteger(0);
-        AtomicInteger failureCount = new AtomicInteger(0);
 
         for (int i = 0; i < threads; i++) {
             executor.submit(() -> {
@@ -114,10 +111,7 @@ class LedgerServiceIntegrationTest {
                     TransactionRequest request = createRequest(TransactionType.TRANSFER, bobId, aliceId, "30.00");
                     latch.await();
                     ledgerService.processTransaction(request);
-                    successCount.incrementAndGet();
-                } catch (Exception _) {
-                    failureCount.incrementAndGet();
-                }
+                } catch (Exception _){}
             });
         }
 
@@ -178,6 +172,7 @@ class LedgerServiceIntegrationTest {
         a.setType(type);
         a.setBalance(balance);
         a.setCurrency(CurrencyType.USD);
+        a.setStatus(AccountStatus.ACTIVE);
         accountRepository.save(a);
     }
 

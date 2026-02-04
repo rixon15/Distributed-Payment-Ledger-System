@@ -20,7 +20,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
 import java.util.Optional;
@@ -34,7 +33,6 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
-@ActiveProfiles("test")
 class LedgerServiceUnitTest {
 
     @Mock
@@ -104,6 +102,8 @@ class LedgerServiceUnitTest {
             when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.of(senderAccount));
             when(accountRepository.findByUserIdAndCurrency(receiverId, CurrencyType.USD)).thenReturn(Optional.of(receiverAccount));
         }
+        
+        when(transactionRepository.existsByReferenceId(any())).thenReturn(false);
         ledgerService.processTransaction(request);
 
         verify(transactionRepository).save(argThat(t -> t.getStatus() == TransactionStatus.POSTED));
@@ -144,6 +144,7 @@ class LedgerServiceUnitTest {
 
         when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.of(senderAccount));
         when(accountRepository.findByUserIdAndCurrency(receiverId, CurrencyType.USD)).thenReturn(Optional.of(receiverAccount));
+        when(transactionRepository.existsByReferenceId(any())).thenReturn(false);
 
         ledgerService.processTransaction(request);
 
