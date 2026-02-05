@@ -8,7 +8,7 @@ CREATE TABLE payments
     external_transaction_id VARCHAR(255),
     error_message           VARCHAR(255),
     created_at              TIMESTAMP WITHOUT TIME ZONE NOT NULL,
-    update_at               TIMESTAMP WITHOUT TIME ZONE,
+    updated_at              TIMESTAMP WITHOUT TIME ZONE,
     version                 BIGINT,
     CONSTRAINT pk_payments PRIMARY KEY (id)
 );
