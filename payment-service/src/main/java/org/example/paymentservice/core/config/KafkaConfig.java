@@ -24,6 +24,12 @@ public class KafkaConfig {
     @Value("${app.kafka.topics.transaction-initiated}")
     private String transactionInitiatedTopic;
 
+    @Value("${app.kafka.partitions}")
+    private Integer partitionsNum;
+
+    @Value("${app.kafka.replicas}")
+    private Integer replicasNum;
+
     @Bean
     public ProducerFactory<String, Object> producerFactory() {
         Map<String, Object> props = new HashMap<>();
@@ -44,8 +50,8 @@ public class KafkaConfig {
     @Bean
     public NewTopic transactionInitiatedTopic() {
         return TopicBuilder.name(transactionInitiatedTopic)
-                .partitions(3)
-                .replicas(1) //For production make sure to increase replicas
+                .partitions(partitionsNum)
+                .replicas(replicasNum) // For production make sure to increase replicas
                 .build();
     }
 }
