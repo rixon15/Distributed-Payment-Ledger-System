@@ -5,11 +5,14 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.payment.system</groupId>
-    <artifactId>distriuted-payment-ledger-system</artifactId>
+    <artifactId>distributed-payment-ledger-system</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 
     <packaging>pom</packaging>
 
+    <modules>
+        <module>ledger-service</module>
+    </modules>
 
     <properties>
         <java.version>25</java.version>
