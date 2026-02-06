@@ -30,8 +30,16 @@ public class Payment {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
+    //The source of thetransfer
     @Column(nullable = false)
     private UUID userId;
+
+    //Needed for P2P transfers
+    private UUID receiverId;
+
+    @Column(nullable = false)
+    @Enumerated(EnumType.STRING)
+    private TransactionType type;
 
     @Column(nullable = false, unique = true)
     private String idempotencyKey;

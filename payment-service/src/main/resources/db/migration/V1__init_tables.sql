@@ -1,10 +1,12 @@
 CREATE TABLE payments
 (
-    id UUID NOT NULL,
-    user_id UUID NOT NULL,
-    idempotency_key         VARCHAR(255)   NOT NULL,
-    amount                  DECIMAL(19, 4) NOT NULL,
-    status                  VARCHAR(255)   NOT NULL,
+    id                      UUID                        NOT NULL,
+    user_id                 UUID                        NOT NULL,
+    receiver_id             UUID,
+    type                    varchar(255)                NOT NULL,
+    idempotency_key         VARCHAR(255)                NOT NULL,
+    amount                  DECIMAL(19, 4)              NOT NULL,
+    status                  VARCHAR(255)                NOT NULL,
     external_transaction_id VARCHAR(255),
     error_message           VARCHAR(255),
     created_at              TIMESTAMP WITHOUT TIME ZONE NOT NULL,
