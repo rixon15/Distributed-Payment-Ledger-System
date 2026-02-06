@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.math.BigDecimal;
 import java.util.concurrent.ThreadLocalRandom;
 
 @RestController
@@ -29,7 +30,7 @@ public class MockRiskController {
             return new RiskResponse(RiskStatus.MANUAL_REVIEW, "Transaction flagged for manual review");
         }
 
-        if (request.amount().doubleValue() > 10_000.00) {
+        if (request.amount().compareTo(BigDecimal.valueOf(10_000.00)) > 0) {
             return new RiskResponse(RiskStatus.REJECTED, "Amount is too high");
         }
 
