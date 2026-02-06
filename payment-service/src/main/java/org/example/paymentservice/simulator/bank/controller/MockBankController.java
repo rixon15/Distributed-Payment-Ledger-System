@@ -1,9 +1,9 @@
-package org.example.paymentservice.client.bank.controller;
+package org.example.paymentservice.simulator.bank.controller;
 
-import org.example.paymentservice.client.bank.dto.BankPaymentRequest;
-import org.example.paymentservice.client.bank.dto.BankPaymentResponse;
-import org.example.paymentservice.client.bank.dto.BankPaymentStatus;
-import org.example.paymentservice.client.bank.exceptions.BankErrorException;
+import org.example.paymentservice.simulator.bank.dto.BankPaymentRequest;
+import org.example.paymentservice.simulator.bank.dto.BankPaymentResponse;
+import org.example.paymentservice.simulator.bank.dto.BankPaymentStatus;
+import org.example.paymentservice.simulator.bank.exceptions.BankErrorException;
 import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;

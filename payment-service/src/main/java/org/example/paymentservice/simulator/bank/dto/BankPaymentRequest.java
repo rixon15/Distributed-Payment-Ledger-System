@@ -1,4 +1,4 @@
-package org.example.paymentservice.client.bank.dto;
+package org.example.paymentservice.simulator.bank.dto;
 
 import java.math.BigDecimal;
 import java.util.UUID;
