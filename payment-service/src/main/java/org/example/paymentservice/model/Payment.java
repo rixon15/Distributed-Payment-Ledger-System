@@ -1,10 +1,12 @@
 package org.example.paymentservice.model;
 
 import jakarta.persistence.*;
+import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.example.paymentservice.dto.PaymentRequest;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
@@ -66,4 +68,12 @@ public class Payment {
     @Version
     private Long version;
 
+    public Payment update(String errorMessage, @NotNull PaymentStatus status) {
+        if(errorMessage != null && !errorMessage.isBlank()) {
+            this.errorMessage = errorMessage;
+        }
+        this.status = status;
+
+        return this;
+    }
 }
