@@ -1,4 +1,4 @@
-package org.example.paymentservice.client.bank.exceptions;
+package org.example.paymentservice.simulator.bank.exceptions;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ResponseStatus;

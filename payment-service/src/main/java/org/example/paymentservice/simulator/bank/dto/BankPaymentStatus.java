@@ -1,4 +1,4 @@
-package org.example.paymentservice.client.bank.dto;
+package org.example.paymentservice.simulator.bank.dto;
 
 public enum BankPaymentStatus {
     APPROVED,

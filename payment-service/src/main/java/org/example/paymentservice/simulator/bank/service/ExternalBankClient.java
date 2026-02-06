@@ -1,7 +1,7 @@
-package org.example.paymentservice.client.bank.service;
+package org.example.paymentservice.simulator.bank.service;
 
-import org.example.paymentservice.client.bank.dto.BankPaymentRequest;
-import org.example.paymentservice.client.bank.dto.BankPaymentResponse;
+import org.example.paymentservice.simulator.bank.dto.BankPaymentRequest;
+import org.example.paymentservice.simulator.bank.dto.BankPaymentResponse;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
