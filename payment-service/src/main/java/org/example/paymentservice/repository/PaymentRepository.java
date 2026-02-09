@@ -10,5 +10,5 @@ import java.util.UUID;
 public interface PaymentRepository extends JpaRepository<Payment, UUID> {
 
 
-
+    Payment findByUserId(UUID userId);
 }

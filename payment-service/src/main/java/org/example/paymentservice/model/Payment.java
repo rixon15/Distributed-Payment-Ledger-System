@@ -1,7 +1,6 @@
 package org.example.paymentservice.model;
 
 import jakarta.persistence.*;
-import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -50,6 +49,9 @@ public class Payment {
     private BigDecimal amount;
 
     @Column(nullable = false)
+    private CurrencyType currency;
+
+    @Column(nullable = false)
     @Enumerated(EnumType.STRING)
     private PaymentStatus status;
 
@@ -68,12 +70,13 @@ public class Payment {
     @Version
     private Long version;
 
-    public Payment update(String errorMessage, @NotNull PaymentStatus status) {
-        if(errorMessage != null && !errorMessage.isBlank()) {
-            this.errorMessage = errorMessage;
-        }
-        this.status = status;
-
-        return this;
+    public PaymentRequest mapToRequest() {
+        return new PaymentRequest(
+                this.receiverId,
+                this.idempotencyKey,
+                this.type,
+                this.amount,
+                this.currency.toString()
+        );
     }
 }
