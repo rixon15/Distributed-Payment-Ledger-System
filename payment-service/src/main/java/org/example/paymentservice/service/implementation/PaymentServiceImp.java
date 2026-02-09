@@ -67,6 +67,9 @@ public class PaymentServiceImp implements PaymentService {
                         .build()
         ));
 
+        RiskResponse riskResult = checkRisk(senderId, request);
+        log.info("Checked risk result for payment {}: {}", payment.getId(), riskResult.status());
+
         strategy.execute(payment, request);
     }
 
