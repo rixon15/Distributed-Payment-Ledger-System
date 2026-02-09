@@ -49,6 +49,7 @@ public class Payment {
     private BigDecimal amount;
 
     @Column(nullable = false)
+    @Enumerated(EnumType.STRING)
     private CurrencyType currency;
 
     @Column(nullable = false)

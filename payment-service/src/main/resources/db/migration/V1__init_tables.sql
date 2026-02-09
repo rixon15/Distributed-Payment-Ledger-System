@@ -17,7 +17,7 @@ CREATE TABLE payments
     type                    VARCHAR(255)                NOT NULL,
     idempotency_key         VARCHAR(255)                NOT NULL,
     amount                  DECIMAL(19, 4)              NOT NULL,
-    currency                SMALLINT                    NOT NULL,
+    currency                varchar(3)                  NOT NULL,
     status                  VARCHAR(255)                NOT NULL,
     external_transaction_id VARCHAR(255),
     error_message           VARCHAR(255),
