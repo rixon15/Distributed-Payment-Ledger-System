@@ -5,7 +5,7 @@ import com.openfashion.ledgerservice.core.exceptions.MissingSystemAccountExcepti
 import com.openfashion.ledgerservice.core.exceptions.UnsupportedTransactionException;
 import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.model.OutboxEvent;
-import com.openfashion.ledgerservice.dto.OutboxStatus;
+import com.openfashion.ledgerservice.model.OutboxStatus;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.model.*;
 import com.openfashion.ledgerservice.repository.AccountRepository;
@@ -15,6 +15,7 @@ import com.openfashion.ledgerservice.repository.TransactionRepository;
 import com.openfashion.ledgerservice.service.LedgerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.serializer.support.SerializationFailedException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
@@ -191,7 +192,7 @@ public class LedgerServiceImp implements LedgerService {
             outboxRepository.save(outboxEvent);
         } catch (JacksonException e) {
             log.error("Failed to serialize transaction for outbox", e);
-            throw new RuntimeException("Serialization failure", e);
+            throw new SerializationFailedException("Serialization failure", e);
         }
 
     }
