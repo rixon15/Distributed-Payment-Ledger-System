@@ -17,7 +17,7 @@ public class ExternalBankClient {
     }
 
     public BankPaymentResponse processPayment(BankPaymentRequest request) {
-        return restClient.put()
+        return restClient.post()
                 .uri("/pay")
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(request)
