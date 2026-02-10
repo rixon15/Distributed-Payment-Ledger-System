@@ -4,6 +4,7 @@ import com.openfashion.ledgerservice.core.exceptions.*;
 import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.ReleaseRequest;
 import com.openfashion.ledgerservice.dto.ReservationRequest;
+import com.openfashion.ledgerservice.dto.event.WithdrawalCompleteEvent;
 import com.openfashion.ledgerservice.model.OutboxEvent;
 import com.openfashion.ledgerservice.model.OutboxStatus;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
@@ -219,6 +220,48 @@ public class LedgerServiceImp implements LedgerService {
         postingRepository.saveAll(releasePostings);
 
         log.info("Successfully released {} back to user {}", amount, userAccount.getUserId());
+    }
+
+    @Transactional
+    public void processWithdrawal(WithdrawalCompleteEvent event) {
+        Transaction pendingTransaction = transactionRepository.findByReferenceId(event.referenceId().toString())
+                .orElseThrow(() -> new TransactionNotFoundException(event.referenceId()));
+
+        if (pendingTransaction.getStatus() != TransactionStatus.PENDING) {
+            throw new IllegalStateException("Transaction status is not PENDING");
+        }
+
+        Posting posting = postingRepository.findByTransactionAndDirection(pendingTransaction, PostingDirection.CREDIT)
+                .orElseThrow(() -> new PostingNotFoundException(
+                        pendingTransaction.getId(),
+                        PostingDirection.DEBIT
+                ));
+
+        if (!event.amount().equals(posting.getAmount())) {
+            throw new DataMismatchException("Event data differs from transaction/posting data");
+        }
+
+
+
+        Account withdrawalAccount = posting.getAccount();
+        Account worldAccount = accountRepository.findByNameAndCurrency("WORLD_LIQUIDITY", event.currency())
+                .orElseThrow(() -> new MissingSystemAccountException("WORLD_LIQUIDITY"));
+
+        List<Posting> postings = List.of(
+                createPosting(pendingTransaction, withdrawalAccount, event.amount(), PostingDirection.DEBIT),
+                createPosting(pendingTransaction, worldAccount, event.amount(), PostingDirection.CREDIT)
+        );
+
+        withdrawalAccount.setBalance(withdrawalAccount.getBalance().subtract(event.amount()));
+        worldAccount.setBalance(worldAccount.getBalance().add(event.amount()));
+
+        pendingTransaction.setStatus(TransactionStatus.POSTED);
+
+        transactionRepository.save(pendingTransaction);
+        accountRepository.save(withdrawalAccount);
+        accountRepository.save(worldAccount);
+        postingRepository.saveAll(postings);
+
     }
 
     private void updateBalance(Account account, BigDecimal amount) {
