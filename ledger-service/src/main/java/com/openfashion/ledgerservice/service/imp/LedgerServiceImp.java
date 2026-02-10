@@ -1,9 +1,9 @@
 package com.openfashion.ledgerservice.service.imp;
 
-import com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException;
-import com.openfashion.ledgerservice.core.exceptions.MissingSystemAccountException;
-import com.openfashion.ledgerservice.core.exceptions.UnsupportedTransactionException;
+import com.openfashion.ledgerservice.core.exceptions.*;
 import com.openfashion.ledgerservice.core.util.MoneyUtil;
+import com.openfashion.ledgerservice.dto.ReleaseRequest;
+import com.openfashion.ledgerservice.dto.ReservationRequest;
 import com.openfashion.ledgerservice.model.OutboxEvent;
 import com.openfashion.ledgerservice.model.OutboxStatus;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
@@ -42,7 +42,7 @@ public class LedgerServiceImp implements LedgerService {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final OutboxRepository outboxRepository;
     private static final String FAILED_TRANSACTION = "transaction.failed";
-
+    private static final String WITHDRAWAL_ACCOUNT_NAME = "PENDING_WITHDRAWAL";
 
     @Transactional(isolation = Isolation.SERIALIZABLE)
     @Retryable(
@@ -138,6 +138,87 @@ public class LedgerServiceImp implements LedgerService {
 
         log.info("Transaction {} processed successfully in {} ms", request.getReferenceId(), System.currentTimeMillis() - start);
 
+    }
+
+    @Transactional
+    public void reserveFunds(ReservationRequest request) {
+        if (transactionRepository.existsByReferenceId(request.referenceId().toString())) {
+            log.warn("Reservation already exists for reference: {}", request.referenceId());
+            return;
+        }
+
+        Account userAccount = accountRepository.findByUserIdAndCurrency(request.userId(), request.currency())
+                .orElseThrow(() -> new AccountNotFoundException(request.userId()));
+        Account pendingAccount = accountRepository.findByNameAndCurrency(WITHDRAWAL_ACCOUNT_NAME, request.currency())
+                .orElseThrow(() -> new MissingSystemAccountException(WITHDRAWAL_ACCOUNT_NAME));
+
+        if (userAccount.getStatus() != AccountStatus.ACTIVE) {
+            throw new AccountInactiveException(userAccount.getId());
+        }
+        if (userAccount.getBalance().compareTo(request.amount()) < 0) {
+            throw new InsufficientFundsException(userAccount.getId());
+        }
+
+        Transaction transaction = Transaction.builder()
+                .referenceId(request.referenceId().toString())
+                .type(TransactionType.WITHDRAWAL)
+                .status(TransactionStatus.PENDING)
+                .effectiveDate(Instant.now())
+                .build();
+
+        List<Posting> postings = List.of(
+                createPosting(transaction, userAccount, request.amount(), PostingDirection.DEBIT),
+                createPosting(transaction, pendingAccount, request.amount(), PostingDirection.CREDIT)
+        );
+
+        userAccount.setBalance(userAccount.getBalance().subtract(request.amount()));
+        pendingAccount.setBalance(pendingAccount.getBalance().add(request.amount()));
+
+        transactionRepository.save(transaction);
+        accountRepository.save(userAccount);
+        accountRepository.save(pendingAccount);
+        postingRepository.saveAll(postings);
+    }
+
+    @Transactional
+    public void releaseFunds(ReleaseRequest request) {
+        log.info("Attempting to release reserved funds for payment: {}", request.referenceId());
+
+        Transaction transaction = transactionRepository.findByReferenceId(request.referenceId().toString())
+                .orElseThrow(() -> new TransactionNotFoundException(request.referenceId()));
+
+        if (transaction.getStatus() != TransactionStatus.PENDING) {
+            log.warn("Cannot release funds: Transaction {} is already in status {}",
+                    request.referenceId(), transaction.getStatus());
+            return;
+        }
+
+        Posting originalDebit = postingRepository.findByTransactionAndDirection(transaction, PostingDirection.DEBIT)
+                .orElseThrow();
+        Account userAccount = originalDebit.getAccount();
+
+        Account pendingAccount = accountRepository.findByNameAndCurrency(WITHDRAWAL_ACCOUNT_NAME, userAccount.getCurrency())
+                .orElseThrow(() -> new MissingSystemAccountException(WITHDRAWAL_ACCOUNT_NAME));
+
+        BigDecimal amount = originalDebit.getAmount();
+
+        List<Posting> releasePostings = List.of(
+                createPosting(transaction, pendingAccount, amount, PostingDirection.DEBIT),
+                createPosting(transaction, userAccount, amount, PostingDirection.CREDIT)
+        );
+
+        pendingAccount.setBalance(pendingAccount.getBalance().subtract(amount));
+        userAccount.setBalance(userAccount.getBalance().add(amount));
+
+        transaction.setStatus(TransactionStatus.FAILED);
+        transaction.setMetadata("Funds released due to payment failure");
+
+        transactionRepository.save(transaction);
+        accountRepository.save(pendingAccount);
+        accountRepository.save(userAccount);
+        postingRepository.saveAll(releasePostings);
+
+        log.info("Successfully released {} back to user {}", amount, userAccount.getUserId());
     }
 
     private void updateBalance(Account account, BigDecimal amount) {
