@@ -26,7 +26,7 @@ public class WithdrawalEventListener {
     @KafkaListener(
             topics = "transaction.withdrawal.confirmed",
             groupId = "${spring.kafka.consumer.group-id}",
-            containerFactory = "kafkaListenerContainerFactory"
+            containerFactory = "withdrawalKafkaListenerContainerFactory"
     )
     public void handleWithdrawalComplete(WithdrawalCompleteEvent event, Acknowledgment ack) {
         log.info("Received withdrawal completed event: {}", event.referenceId());

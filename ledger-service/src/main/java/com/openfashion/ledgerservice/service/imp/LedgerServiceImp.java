@@ -143,6 +143,9 @@ public class LedgerServiceImp implements LedgerService {
 
     @Transactional
     public void reserveFunds(ReservationRequest request) {
+
+        log.info("Starting fund reservation for user: {}", request.userId());
+
         if (transactionRepository.existsByReferenceId(request.referenceId().toString())) {
             log.warn("Reservation already exists for reference: {}", request.referenceId());
             return;
@@ -179,6 +182,8 @@ public class LedgerServiceImp implements LedgerService {
         accountRepository.save(userAccount);
         accountRepository.save(pendingAccount);
         postingRepository.saveAll(postings);
+
+        log.info("Reservation of {} {} was successful for user: {}", request.amount(), request.currency(), request.userId());
     }
 
     @Transactional
@@ -224,6 +229,9 @@ public class LedgerServiceImp implements LedgerService {
 
     @Transactional
     public void processWithdrawal(WithdrawalCompleteEvent event) {
+
+        log.info("Processing withdrawal: {}", event.referenceId());
+
         Transaction pendingTransaction = transactionRepository.findByReferenceId(event.referenceId().toString())
                 .orElseThrow(() -> new TransactionNotFoundException(event.referenceId()));
 
@@ -240,7 +248,6 @@ public class LedgerServiceImp implements LedgerService {
         if (!event.amount().equals(posting.getAmount())) {
             throw new DataMismatchException("Event data differs from transaction/posting data");
         }
-
 
 
         Account withdrawalAccount = posting.getAccount();
@@ -262,6 +269,8 @@ public class LedgerServiceImp implements LedgerService {
         accountRepository.save(worldAccount);
         postingRepository.saveAll(postings);
 
+        saveOutboxEvent(pendingTransaction, "WITHDRAWAL_SETTLED");
+        log.info("Withdrawal was successful. Transaction ID: {}", pendingTransaction.getId());
     }
 
     private void updateBalance(Account account, BigDecimal amount) {
