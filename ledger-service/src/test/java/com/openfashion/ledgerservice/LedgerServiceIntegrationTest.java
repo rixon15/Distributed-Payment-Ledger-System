@@ -57,6 +57,10 @@ class LedgerServiceIntegrationTest {
     @Autowired
     private PostingRepository postingRepository;
 
+    private UUID userId;
+    private static final String PENDING_NAME = "PENDING_WITHDRAWAL";
+    private static final String WORLD_NAME = "WORLD_LIQUIDITY";
+
     @BeforeEach
     void cleanDb() {
         postingRepository.deleteAll();
@@ -64,8 +68,13 @@ class LedgerServiceIntegrationTest {
         transactionRepository.deleteAll();
         accountRepository.deleteAll();
 
-        // Always setup a System Account for Deposit tests
-        setupAccount(null, "WORLD_LIQUIDITY", AccountType.EQUITY, BigDecimal.ZERO);
+        userId = UUID.randomUUID();
+
+        // Always setup System Accounts
+        setupAccount(null, WORLD_NAME, AccountType.EQUITY, BigDecimal.ZERO);
+        setupAccount(null, PENDING_NAME, AccountType.LIABILITY, BigDecimal.ZERO);
+        setupAccount(userId, "User Wallet", AccountType.ASSET, BigDecimal.ZERO);
+
     }
 
     @Test
@@ -111,7 +120,7 @@ class LedgerServiceIntegrationTest {
                     TransactionRequest request = createRequest(TransactionType.TRANSFER, bobId, aliceId, "30.00");
                     latch.await();
                     ledgerService.processTransaction(request);
-                } catch (Exception _){}
+                } catch (Exception _) {/*Cath is here as a placeholder */}
             });
         }
 

@@ -266,7 +266,7 @@ public class LedgerServiceImp implements LedgerService {
                         PostingDirection.CREDIT
                 ));
 
-        if (!event.amount().equals(posting.getAmount())) {
+        if (event.amount().compareTo(posting.getAmount()) != 0) {
             throw new DataMismatchException("Event data differs from transaction/posting data");
         }
 
