@@ -1,6 +1,5 @@
 package com.openfashion.ledgerservice.dto.event;
 
-import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.math.BigDecimal;
@@ -16,7 +15,6 @@ public record TransactionInitiatedEvent (
         @JsonProperty("receiverId") UUID receiverId,
 
         @JsonProperty("amount")
-        @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "#,##0.0000")
         BigDecimal amount,
 
         @JsonProperty("currency") String currency,

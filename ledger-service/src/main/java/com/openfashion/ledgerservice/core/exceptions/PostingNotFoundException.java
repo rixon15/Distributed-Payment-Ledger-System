@@ -9,6 +9,6 @@ import java.util.UUID;
 @ResponseStatus(HttpStatus.NOT_FOUND)
 public class PostingNotFoundException extends RuntimeException {
     public PostingNotFoundException(UUID transactionId, PostingDirection direction) {
-        super("Cannot find" + direction + " posting for transaction: " + transactionId);
+        super("Cannot find " + direction + " posting for transaction: " + transactionId);
     }
 }

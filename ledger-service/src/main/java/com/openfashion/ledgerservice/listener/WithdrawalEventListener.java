@@ -35,8 +35,8 @@ public class WithdrawalEventListener {
             ledgerService.processWithdrawal(event);
 
             ack.acknowledge();
-        } catch (Exception _) {
-            log.error("Error processing withdrawal event: {}", event.referenceId());
+        } catch (Exception e) {
+            log.error("Error processing withdrawal event: {}", event.referenceId(), e);
         }
 
     }
