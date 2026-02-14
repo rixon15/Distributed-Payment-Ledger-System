@@ -1,6 +1,9 @@
 package com.openfashion.ledgerservice;
 
+import com.openfashion.ledgerservice.dto.ReleaseRequest;
+import com.openfashion.ledgerservice.dto.ReservationRequest;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
+import com.openfashion.ledgerservice.dto.event.WithdrawalCompleteEvent;
 import com.openfashion.ledgerservice.model.*;
 import com.openfashion.ledgerservice.repository.AccountRepository;
 import com.openfashion.ledgerservice.repository.OutboxRepository;
@@ -73,7 +76,7 @@ class LedgerServiceIntegrationTest {
         // Always setup System Accounts
         setupAccount(null, WORLD_NAME, AccountType.EQUITY, BigDecimal.ZERO);
         setupAccount(null, PENDING_NAME, AccountType.LIABILITY, BigDecimal.ZERO);
-        setupAccount(userId, "User Wallet", AccountType.ASSET, BigDecimal.ZERO);
+        setupAccount(userId, "User Wallet", AccountType.ASSET, new BigDecimal("100.00"));
 
     }
 
@@ -171,6 +174,54 @@ class LedgerServiceIntegrationTest {
                     assertThat(events).isNotEmpty();
                     assertThat(events.getFirst().getStatus().name()).isEqualTo("PROCESSED");
                 });
+    }
+
+    @Test
+    @DisplayName("Full Withdrawal Cycle: Reserve -> Settle")
+    void testFullWithdrawalLifecycle() {
+        UUID referenceId = UUID.randomUUID();
+        BigDecimal amount = new BigDecimal("40.00");
+
+        ReservationRequest reservationRequest = new ReservationRequest(userId, amount, CurrencyType.USD, referenceId);
+        ledgerService.reserveFunds(reservationRequest);
+
+        Account userAcc = accountRepository.findByUserIdAndCurrency(userId, CurrencyType.USD).orElseThrow();
+        Account pendingAcc = accountRepository.findByNameAndCurrency(PENDING_NAME, CurrencyType.USD).orElseThrow();
+
+        assertThat(userAcc.getBalance()).isEqualByComparingTo("60.00");
+        assertThat(pendingAcc.getBalance()).isEqualByComparingTo("40.00");
+        assertThat(transactionRepository.existsByReferenceId(referenceId.toString())).isTrue();
+
+        WithdrawalCompleteEvent settleEvent = new WithdrawalCompleteEvent(referenceId, amount, CurrencyType.USD);
+        ledgerService.processWithdrawal(settleEvent);
+
+        Account finalPendingAcc = accountRepository.findByNameAndCurrency(PENDING_NAME, CurrencyType.USD).orElseThrow();
+        Account worldAcc = accountRepository.findByNameAndCurrency(WORLD_NAME, CurrencyType.USD).orElseThrow();
+        Transaction tx = transactionRepository.findByReferenceId(referenceId.toString()).orElseThrow();
+
+        assertThat(finalPendingAcc.getBalance()).isEqualByComparingTo("0.00");
+        assertThat(worldAcc.getBalance()).isEqualByComparingTo("40.00");
+        assertThat(tx.getStatus()).isEqualTo(TransactionStatus.POSTED);
+        assertThat(postingRepository.findAll()).hasSize(4);
+    }
+
+    @Test
+    @DisplayName("Compensating Transaction: Reserve -> Release")
+    void testWithdrawalCompensation() {
+        UUID referenceId = UUID.randomUUID();
+        BigDecimal amount = new BigDecimal("25.00");
+
+        ledgerService.reserveFunds(new ReservationRequest(userId, amount, CurrencyType.USD, referenceId));
+
+        ledgerService.releaseFunds(new ReleaseRequest(referenceId));
+
+        Account userAcc = accountRepository.findByUserIdAndCurrency(userId, CurrencyType.USD).orElseThrow();
+        Account pendingAcc = accountRepository.findByNameAndCurrency(PENDING_NAME, CurrencyType.USD).orElseThrow();
+        Transaction transaction = transactionRepository.findByReferenceId(referenceId.toString()).orElseThrow();
+
+        assertThat(userAcc.getBalance()).isEqualByComparingTo("100.00");
+        assertThat(pendingAcc.getBalance()).isEqualByComparingTo("0.00");
+        assertThat(transaction.getStatus()).isEqualTo(TransactionStatus.FAILED);
     }
 
 
