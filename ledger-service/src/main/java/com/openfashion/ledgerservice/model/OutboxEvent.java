@@ -1,6 +1,5 @@
 package com.openfashion.ledgerservice.model;
 
-import com.openfashion.ledgerservice.dto.OutboxStatus;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;

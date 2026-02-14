@@ -39,6 +39,10 @@ public class Transaction {
     @Column(nullable = false)
     private Instant effectiveDate;
 
+    @Column(nullable = false)
+    @Version
+    private long version;
+
     @CreationTimestamp
     @Column(nullable = false)
     private Instant createdAt;

@@ -13,7 +13,10 @@ public record TransactionInitiatedEvent (
         @JsonProperty("type") String type,
         @JsonProperty("senderId") UUID senderId,
         @JsonProperty("receiverId") UUID receiverId,
-        @JsonProperty("amount") BigDecimal amount,
+
+        @JsonProperty("amount")
+        BigDecimal amount,
+
         @JsonProperty("currency") String currency,
         @JsonProperty("metadata") String metadata
 ) {}

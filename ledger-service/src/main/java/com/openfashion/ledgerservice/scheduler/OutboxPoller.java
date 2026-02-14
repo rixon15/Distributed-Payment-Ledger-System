@@ -1,7 +1,7 @@
 package com.openfashion.ledgerservice.scheduler;
 
 import com.openfashion.ledgerservice.model.OutboxEvent;
-import com.openfashion.ledgerservice.dto.OutboxStatus;
+import com.openfashion.ledgerservice.model.OutboxStatus;
 import com.openfashion.ledgerservice.repository.OutboxRepository;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;

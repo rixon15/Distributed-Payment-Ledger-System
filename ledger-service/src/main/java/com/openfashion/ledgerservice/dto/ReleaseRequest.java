@@ -1,4 +1,4 @@
-package org.example.paymentservice.dto;
+package com.openfashion.ledgerservice.dto;
 
 import java.util.UUID;
 
