@@ -1,6 +1,6 @@
 package com.openfashion.ledgerservice.listener;
 
-import com.openfashion.ledgerservice.dto.event.WithdrawalCompleteEvent;
+import com.openfashion.ledgerservice.dto.event.WithdrawalConfirmedEvent;
 import com.openfashion.ledgerservice.service.LedgerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,8 +28,8 @@ public class WithdrawalEventListener {
             groupId = "${spring.kafka.consumer.group-id}",
             containerFactory = "withdrawalKafkaListenerContainerFactory"
     )
-    public void handleWithdrawalComplete(WithdrawalCompleteEvent event, Acknowledgment ack) {
-        log.info("Received withdrawal completed event: {}", event.referenceId());
+    public void handleWithdrawalConfirmed(WithdrawalConfirmedEvent event, Acknowledgment ack) {
+        log.info("Received withdrawal confirmed event: {}", event.referenceId());
 
         try {
             ledgerService.processWithdrawal(event);

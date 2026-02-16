@@ -8,6 +8,6 @@ import java.util.UUID;
 public record ReservationRequest(
         UUID userId,
         BigDecimal amount,
-        CurrencyType currencyType,
+        CurrencyType currency,
         UUID referenceId
 ) {}

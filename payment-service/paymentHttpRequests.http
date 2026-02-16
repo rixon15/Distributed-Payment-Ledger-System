@@ -1,0 +1,51 @@
+### Test Internal Transfer (P2P)
+POST http://localhost:8081/payments/execute
+X-User-ID: 11111111-1111-1111-1111-111111111111
+Content-Type: application/json
+
+{
+  "receiverId": "22222222-2222-2222-2222-222222222222",
+  "idempotencyKey": "transfer-unique-key-011",
+  "type": "TRANSFER",
+  "amount": 50.00,
+  "currency": "USD"
+}
+
+### Test External Deposit
+POST http://localhost:8081/payments/execute
+X-User-ID: 22222222-2222-2222-2222-222222222222
+Content-Type: application/json
+
+{
+  "type": "DEPOSIT",
+  "amount": 500.00,
+  "currency": "USD",
+  "receiverId": null,
+  "idempotencyKey": "deposit-unique-key-009"
+}
+
+### Test External Withdrawal
+POST http://localhost:8081/payments/execute
+X-User-ID: 22222222-2222-2222-2222-222222222222
+Content-Type: application/json
+
+{
+  "type": "WITHDRAWAL",
+  "amount": 150.00,
+  "currency": "USD",
+  "receiverId": null,
+  "idempotencyKey": "withdraw-unique-key-028"
+}
+
+### Test Validation Failure (Missing Receiver for Transfer)
+POST http://localhost:8081/payments/execute
+X-User-ID: 550e8400-e29b-41d4-a716-446655440000
+Content-Type: application/json
+
+{
+  "type": "TRANSFER",
+  "amount": 10.00,
+  "currency": "USD",
+  "receiverId": null,
+  "idempotencyKey": "fail-key-005"
+}

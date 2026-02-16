@@ -4,7 +4,7 @@ import com.openfashion.ledgerservice.core.exceptions.*;
 import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.ReleaseRequest;
 import com.openfashion.ledgerservice.dto.ReservationRequest;
-import com.openfashion.ledgerservice.dto.event.WithdrawalCompleteEvent;
+import com.openfashion.ledgerservice.dto.event.WithdrawalConfirmedEvent;
 import com.openfashion.ledgerservice.model.OutboxEvent;
 import com.openfashion.ledgerservice.model.OutboxStatus;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
@@ -42,7 +42,7 @@ public class LedgerServiceImp implements LedgerService {
     private final PostingRepository postingRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final OutboxRepository outboxRepository;
-    private static final String FAILED_TRANSACTION = "transaction.failed";
+    private static final String FAILED_TRANSACTION = "TRANSACTION_FAILED";
     private static final String WITHDRAWAL_ACCOUNT_NAME = "PENDING_WITHDRAWAL";
     private static final String WORLD_ACCOUNT_NAME = "WORLD_LIQUIDITY";
 
@@ -56,7 +56,7 @@ public class LedgerServiceImp implements LedgerService {
         validateTransactionRequest(request);
 
         long start = System.currentTimeMillis();
-        log.info("Processing transaction with referencId: {}", request.getReferenceId());
+        log.info("Processing transaction with referenceId: {}", request.getReferenceId());
 
         if (transactionRepository.existsByReferenceId(request.getReferenceId())) {
             log.warn("Idempotency Triggered: Transaction {} already processed.", request.getReferenceId());
@@ -136,7 +136,7 @@ public class LedgerServiceImp implements LedgerService {
         transactionRepository.save(transaction);
         postingRepository.saveAll(postings);
 
-        saveOutboxEvent(transaction, "transaction.posted");
+        saveOutboxEvent(transaction, "TRANSACTION_COMPLETED");
 
         log.info("Transaction {} processed successfully in {} ms", request.getReferenceId(), System.currentTimeMillis() - start);
 
@@ -248,7 +248,8 @@ public class LedgerServiceImp implements LedgerService {
             backoff = @Backoff(delay = 50, multiplier = 2))
     @Transactional
     @Override
-    public void processWithdrawal(WithdrawalCompleteEvent event) {
+    public void processWithdrawal(WithdrawalConfirmedEvent event) {
+
 
         log.info("Processing withdrawal: {}", event.referenceId());
 
@@ -267,22 +268,22 @@ public class LedgerServiceImp implements LedgerService {
                         PostingDirection.CREDIT
                 ));
 
-        if (event.amount().compareTo(posting.getAmount()) != 0) {
+        if (event.payload().amount().compareTo(posting.getAmount()) != 0) {
             throw new DataMismatchException("Event data differs from transaction/posting data");
         }
 
 
         Account withdrawalAccount = posting.getAccount();
-        Account worldAccount = accountRepository.findByNameAndCurrency(WORLD_ACCOUNT_NAME, event.currency())
+        Account worldAccount = accountRepository.findByNameAndCurrency(WORLD_ACCOUNT_NAME, CurrencyType.valueOf(event.payload().currency()))
                 .orElseThrow(() -> new MissingSystemAccountException(WORLD_ACCOUNT_NAME));
 
         List<Posting> postings = List.of(
-                createPosting(pendingTransaction, withdrawalAccount, event.amount(), PostingDirection.DEBIT),
-                createPosting(pendingTransaction, worldAccount, event.amount(), PostingDirection.CREDIT)
+                createPosting(pendingTransaction, withdrawalAccount, event.payload().amount(), PostingDirection.DEBIT),
+                createPosting(pendingTransaction, worldAccount, event.payload().amount(), PostingDirection.CREDIT)
         );
 
-        withdrawalAccount.setBalance(withdrawalAccount.getBalance().subtract(event.amount()));
-        worldAccount.setBalance(worldAccount.getBalance().add(event.amount()));
+        withdrawalAccount.setBalance(withdrawalAccount.getBalance().subtract(event.payload().amount()));
+        worldAccount.setBalance(worldAccount.getBalance().add(event.payload().amount()));
 
         pendingTransaction.setStatus(TransactionStatus.POSTED);
 
@@ -352,20 +353,20 @@ public class LedgerServiceImp implements LedgerService {
         }
     }
 
-    private void validateWithdrawalCompletedEvent(WithdrawalCompleteEvent event) {
+    private void validateWithdrawalCompletedEvent(WithdrawalConfirmedEvent event) {
         if (event == null) {
             throw new IllegalArgumentException("WithdrawalCompleteEvent must not be null");
         }
         if (event.referenceId() == null) {
             throw new IllegalArgumentException("WithdrawalCompleteEvent.referenceId must not be null");
         }
-        if (event.amount() == null) {
+        if (event.payload().amount() == null) {
             throw new IllegalArgumentException("WithdrawalCompleteEvent.amount must not be null");
         }
-        if (event.currency() == null) {
+        if (event.payload().currency() == null) {
             throw new IllegalArgumentException("WithdrawalCompleteEvent.currency must not be null");
         }
-        if (event.amount().compareTo(BigDecimal.ZERO) <= 0) {
+        if (event.payload().amount().compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("WithdrawalCompleteEvent.amount must be positive");
         }
     }

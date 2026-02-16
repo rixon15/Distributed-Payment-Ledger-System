@@ -4,8 +4,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.paymentservice.core.exception.DuplicatedRequestException;
 import org.example.paymentservice.dto.PaymentRequest;
+import org.example.paymentservice.model.CurrencyType;
 import org.example.paymentservice.model.Payment;
 import org.example.paymentservice.model.PaymentStatus;
+import org.example.paymentservice.model.TransactionType;
 import org.example.paymentservice.repository.PaymentRepository;
 import org.example.paymentservice.service.PaymentService;
 import org.example.paymentservice.service.strategy.PaymentStrategy;
@@ -24,6 +26,7 @@ import org.springframework.web.client.RestClient;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -43,38 +46,68 @@ public class PaymentServiceImp implements PaymentService {
     @Override
     public void processPayment(UUID senderId, PaymentRequest request) {
 
+        UUID receiverId;
+
+        if(request.type() == TransactionType.DEPOSIT || request.type() == TransactionType.WITHDRAWAL) {
+            receiverId = senderId;
+        } else {
+            receiverId = request.receiverId();
+        }
+
         log.info("Processing payment request for user: {} with idempotencyKey: {}", senderId, request.idempotencyKey());
+
+        Optional<Payment> existingPayment = paymentRepository.findByIdempotencyKey(request.idempotencyKey());
+
+        if (existingPayment.isPresent()) {
+            log.warn("Payment already exists in the DB for key: {}", request.idempotencyKey());
+            return;
+        }
 
         if (!acquire(request.idempotencyKey())) {
             log.warn("Duplicate payment request blocked. Key: {}", request.idempotencyKey());
             throw new DuplicatedRequestException(request.idempotencyKey());
         }
 
-        PaymentStrategy strategy = strategyList.stream()
-                .filter(s -> s.supports(request.type()))
-                .findFirst()
-                .orElseThrow(() -> new UnsupportedOperationException("Strategy not supported"));
+        try {
+            PaymentStrategy strategy = strategyList.stream()
+                    .filter(s -> s.supports(request.type()))
+                    .findFirst()
+                    .orElseThrow(() -> new UnsupportedOperationException("Strategy not supported"));
 
-        Payment payment = tx.execute(status -> paymentRepository.save(
-                Payment.builder()
-                        .userId(senderId)
-                        .receiverId(request.receiverId())
-                        .type(request.type())
-                        .idempotencyKey(request.idempotencyKey())
-                        .amount(request.amount())
-                        .status(PaymentStatus.PENDING)
-                        .createdAt(LocalDateTime.now())
-                        .build()
-        ));
+            Payment payment = tx.execute(status -> paymentRepository.save(
+                    Payment.builder()
+                            .userId(senderId)
+                            .receiverId(receiverId)
+                            .type(request.type())
+                            .idempotencyKey(request.idempotencyKey())
+                            .amount(request.amount())
+                            .currency(CurrencyType.valueOf(request.currency().toUpperCase()))
+                            .status(PaymentStatus.PENDING)
+                            .createdAt(LocalDateTime.now())
+                            .build()
+            ));
 
-        RiskResponse riskResult = checkRisk(senderId, request);
-        log.info("Checked risk result for payment {}: {}", payment.getId(), riskResult.status());
+            RiskResponse riskResult = checkRisk(senderId, request);
+            if (riskResult.status() == RiskStatus.REJECTED) {
+                handleRiskFailure(payment, riskResult.reason());
+                return;
+            }
 
-        strategy.execute(payment, request);
+            strategy.execute(payment, request);
+        } catch (Exception e) {
+            log.error("Payment processing failed for key: {}. Releasing Redis lock", request.idempotencyKey());
+            redisTemplate.delete(request.idempotencyKey());
+            throw e;
+        }
     }
 
     public void resumeProcessing(Payment payment) {
         log.info("Retrying payment request for user: {} with idempotencyKey: {}", payment.getUserId(), payment.getIdempotencyKey());
+
+        if (acquire(payment.getIdempotencyKey())) {
+            log.warn("Duplicate payment request blocked. Key: {}", payment.getIdempotencyKey());
+            throw new DuplicatedRequestException(payment.getIdempotencyKey());
+        }
 
         PaymentRequest request = payment.mapToRequest();
 
@@ -97,11 +130,11 @@ public class PaymentServiceImp implements PaymentService {
                 connection.stringCommands().set(
                         keyBytes,
                         valueBytes,
-                        Expiration.seconds(86400),
+                        Expiration.seconds(300),
                         RedisStringCommands.SetOption.SET_IF_ABSENT
                 ));
 
-        return Boolean.TRUE.equals(success);
+        return Boolean.FALSE.equals(success);
     }
 
     private RiskResponse checkRisk(UUID senderId, PaymentRequest request) {
@@ -117,6 +150,16 @@ public class PaymentServiceImp implements PaymentService {
             log.error("Risk Engine unreachable", e);
             return new RiskResponse(RiskStatus.REJECTED, "Risk Service Unavailable");
         }
+    }
+
+    private void handleRiskFailure(Payment payment, String reason) {
+        tx.executeWithoutResult(status -> {
+            payment.setStatus(PaymentStatus.FAILED);
+            payment.setErrorMessage("Risk rejected: " + reason);
+            paymentRepository.save(payment);
+        });
+
+        redisTemplate.delete(payment.getIdempotencyKey());
     }
 
 }

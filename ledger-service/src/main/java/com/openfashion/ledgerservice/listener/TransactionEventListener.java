@@ -2,6 +2,7 @@ package com.openfashion.ledgerservice.listener;
 
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
+import com.openfashion.ledgerservice.dto.event.TransactionPayload;
 import com.openfashion.ledgerservice.model.CurrencyType;
 import com.openfashion.ledgerservice.model.TransactionType;
 import com.openfashion.ledgerservice.service.LedgerService;
@@ -32,7 +33,7 @@ public class TransactionEventListener {
             containerFactory = "initiatedKafkaListenerContainerFactory"
     )
     public void handleTransactionInitiated(TransactionInitiatedEvent event, Acknowledgment acknowledgment) {
-        log.info("Received transaction event: {} type: {}", event.receiverId(), event.type());
+        log.info("Received transaction event: {} type: {}", event.eventId(), event.payload().type());
 
         try {
             TransactionRequest request = mapEventToRequest(event);
@@ -47,14 +48,16 @@ public class TransactionEventListener {
 
     private TransactionRequest mapEventToRequest(TransactionInitiatedEvent event) {
         TransactionRequest request = new TransactionRequest();
+        TransactionPayload payload = event.payload(); // Access the nested payload
 
-        request.setReferenceId(event.referenceId());
-        request.setType(TransactionType.valueOf(event.type()));
-        request.setCurrency(CurrencyType.valueOf(event.currency()));
-        request.setSenderId(event.senderId());
-        request.setReceiverId(event.receiverId());
-        request.setAmount(event.amount());
-        request.setMetadata(event.metadata());
+        request.setReferenceId(event.referenceId()); // This was event.aggregatedId
+        request.setType(TransactionType.valueOf(payload.type()));
+        request.setCurrency(CurrencyType.valueOf(payload.currency()));
+        request.setSenderId(payload.senderId());
+        request.setReceiverId(payload.receiverId());
+        request.setAmount(payload.amount());
+        request.setMetadata(payload.userMessage());
+
         return request;
     }
 

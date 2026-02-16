@@ -1,14 +1,14 @@
-package com.openfashion.ledgerservice.scheduler;
+package org.example.paymentservice.scheduler;
 
-import com.openfashion.ledgerservice.model.OutboxEvent;
-import com.openfashion.ledgerservice.model.OutboxStatus;
-import com.openfashion.ledgerservice.repository.OutboxRepository;
-import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.example.paymentservice.model.OutboxEvent;
+import org.example.paymentservice.model.OutboxStatus;
+import org.example.paymentservice.repository.OutboxRepository;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -19,7 +19,6 @@ public class OutboxPoller {
 
     private final OutboxRepository outboxRepository;
     private final KafkaTemplate<String, String> kafkaTemplate;
-    private static final String TRANSACTION_POSTED_NAME = "transaction.posted";
 
     @Scheduled(fixedDelay = 2000)
     @Transactional
@@ -27,8 +26,6 @@ public class OutboxPoller {
         List<OutboxEvent> events = outboxRepository.findTop50ForProcessing();
 
         if (events.isEmpty()) return;
-
-        log.info("Polling outbox: found {} events to publish", events.size());
 
         for (OutboxEvent event : events) {
             try {
@@ -39,19 +36,20 @@ public class OutboxPoller {
                 event.setStatus(OutboxStatus.PROCESSED);
                 outboxRepository.save(event);
 
-                log.debug("Successfully published event {} to topic {}", event.getId(), event.getEventType());
+                log.debug("Published event {} to topic {}", event.getId(), targetTopic);
             } catch (Exception e) {
-                log.error("Failed to publish outbox event {}:{}", event.getId(), e.getMessage());
+                log.error("Failed to publish outbox event {}: {}", event.getId(), e.getMessage());
             }
-
         }
     }
 
     private String determineTopic(String eventType) {
         return switch (eventType) {
-            case "TRANSACTION_COMPLETED", "WITHDRAWAL_SETTLED" -> TRANSACTION_POSTED_NAME;
+            case "TRANSACTION_INITIATED" -> "transaction.initiated";
+            case "TRANSACTION_WITHDRAWAL_CONFIRMED" -> "transaction.withdrawal.confirmed";
             case "TRANSACTION_FAILED" -> "transaction.failed";
             case null, default -> "transaction.unknown";
         };
     }
+
 }
