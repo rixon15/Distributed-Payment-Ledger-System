@@ -48,7 +48,7 @@ public class PaymentServiceImp implements PaymentService {
 
         UUID receiverId;
 
-        if(request.type() == TransactionType.DEPOSIT || request.type() == TransactionType.WITHDRAWAL) {
+        if (request.type() == TransactionType.DEPOSIT || request.type() == TransactionType.WITHDRAWAL) {
             receiverId = senderId;
         } else {
             receiverId = request.receiverId();
@@ -63,10 +63,7 @@ public class PaymentServiceImp implements PaymentService {
             return;
         }
 
-        if (!acquire(request.idempotencyKey())) {
-            log.warn("Duplicate payment request blocked. Key: {}", request.idempotencyKey());
-            throw new DuplicatedRequestException(request.idempotencyKey());
-        }
+        checkDuplicatedRequest(request.idempotencyKey());
 
         try {
             PaymentStrategy strategy = strategyList.stream()
@@ -74,7 +71,7 @@ public class PaymentServiceImp implements PaymentService {
                     .findFirst()
                     .orElseThrow(() -> new UnsupportedOperationException("Strategy not supported"));
 
-            Payment payment = tx.execute(status -> paymentRepository.save(
+            Payment payment = tx.execute(_ -> paymentRepository.save(
                     Payment.builder()
                             .userId(senderId)
                             .receiverId(receiverId)
@@ -104,10 +101,7 @@ public class PaymentServiceImp implements PaymentService {
     public void resumeProcessing(Payment payment) {
         log.info("Retrying payment request for user: {} with idempotencyKey: {}", payment.getUserId(), payment.getIdempotencyKey());
 
-        if (acquire(payment.getIdempotencyKey())) {
-            log.warn("Duplicate payment request blocked. Key: {}", payment.getIdempotencyKey());
-            throw new DuplicatedRequestException(payment.getIdempotencyKey());
-        }
+        checkDuplicatedRequest(payment.getIdempotencyKey());
 
         PaymentRequest request = payment.mapToRequest();
 
@@ -153,13 +147,20 @@ public class PaymentServiceImp implements PaymentService {
     }
 
     private void handleRiskFailure(Payment payment, String reason) {
-        tx.executeWithoutResult(status -> {
+        tx.executeWithoutResult(_ -> {
             payment.setStatus(PaymentStatus.FAILED);
             payment.setErrorMessage("Risk rejected: " + reason);
             paymentRepository.save(payment);
         });
 
         redisTemplate.delete(payment.getIdempotencyKey());
+    }
+
+    private void checkDuplicatedRequest(String idempotencyKey) {
+        if (acquire(idempotencyKey)) {
+            log.warn("Duplicate payment request blocked. Key: {}", idempotencyKey);
+            throw new DuplicatedRequestException(idempotencyKey);
+        }
     }
 
 }
