@@ -193,7 +193,7 @@ class LedgerServiceUnitTest {
     }
 
     @Test
-    @DisplayName("Should throw MissingworldAccountException if WORLD_LIQUIDITY is missing")
+    @DisplayName("Should throw MissingWorldAccountException if WORLD_LIQUIDITY is missing")
     void testWorldAccountMissing() {
         TransactionRequest request = createRequest(TransactionType.DEPOSIT, new BigDecimal("100.00"));
 

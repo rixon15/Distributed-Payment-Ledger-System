@@ -5,7 +5,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 
 import java.util.UUID;
 
-@ResponseStatus(HttpStatus.UNAUTHORIZED)
+@ResponseStatus(HttpStatus.FORBIDDEN)
 public class AccountInactiveException extends RuntimeException {
     public AccountInactiveException(UUID accountId) {
         super("Account inactive: " + accountId);

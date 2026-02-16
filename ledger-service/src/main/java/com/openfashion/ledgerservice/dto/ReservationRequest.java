@@ -19,7 +19,7 @@ public record ReservationRequest(
 
     public ReservationRequest {
         if (amount != null) {
-            amount = amount.setScale(4, RoundingMode.HALF_UP);
+            amount = amount.setScale(4, RoundingMode.HALF_EVEN);
         }
     }
 }

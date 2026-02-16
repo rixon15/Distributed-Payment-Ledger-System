@@ -123,7 +123,7 @@ class LedgerServiceIntegrationTest {
                     TransactionRequest request = createRequest(TransactionType.TRANSFER, bobId, aliceId, "30.00");
                     latch.await();
                     ledgerService.processTransaction(request);
-                } catch (Exception _) {/*Cath is here as a placeholder */}
+                } catch (Exception _) {/*Catch is here as a placeholder */}
             });
         }
 

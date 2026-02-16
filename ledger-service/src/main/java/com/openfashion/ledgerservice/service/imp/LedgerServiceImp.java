@@ -247,6 +247,7 @@ public class LedgerServiceImp implements LedgerService {
             maxAttempts = 4,
             backoff = @Backoff(delay = 50, multiplier = 2))
     @Transactional
+    @Override
     public void processWithdrawal(WithdrawalCompleteEvent event) {
 
         log.info("Processing withdrawal: {}", event.referenceId());
