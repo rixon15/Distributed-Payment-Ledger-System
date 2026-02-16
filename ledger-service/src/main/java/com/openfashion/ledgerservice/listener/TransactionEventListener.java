@@ -29,7 +29,7 @@ public class TransactionEventListener {
     @KafkaListener(
             topics = "transaction.initiated",
             groupId = "${spring.kafka.consumer.group-id}",
-            containerFactory = "kafkaListenerContainerFactory"
+            containerFactory = "initiatedKafkaListenerContainerFactory"
     )
     public void handleTransactionInitiated(TransactionInitiatedEvent event, Acknowledgment acknowledgment) {
         log.info("Received transaction event: {} type: {}", event.receiverId(), event.type());

@@ -30,6 +30,7 @@ CREATE TABLE transactions
     type           VARCHAR(20)              NOT NULL,
     status         VARCHAR(20)              NOT NULL,
     metadata       TEXT,
+    version        BIGINT                   NOT NULL DEFAULT 0,
     effective_date TIMESTAMP WITH TIME ZONE NOT NULL,
     created_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT pk_transactions PRIMARY KEY (id)
