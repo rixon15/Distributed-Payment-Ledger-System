@@ -98,10 +98,9 @@ public class PaymentServiceImp implements PaymentService {
         }
     }
 
+    @Override
     public void resumeProcessing(Payment payment) {
         log.info("Retrying payment request for user: {} with idempotencyKey: {}", payment.getUserId(), payment.getIdempotencyKey());
-
-        checkDuplicatedRequest(payment.getIdempotencyKey());
 
         PaymentRequest request = payment.mapToRequest();
 
@@ -112,6 +111,11 @@ public class PaymentServiceImp implements PaymentService {
 
         RiskResponse riskResult = checkRisk(payment.getUserId(), request);
         log.info("Rechecked risk result for payment {}: {}", payment.getId(), riskResult.status());
+
+        if (riskResult.status() == RiskStatus.REJECTED) {
+            handleRiskFailure(payment, riskResult.reason());
+            return;
+        }
 
         strategy.execute(payment, request);
     }
