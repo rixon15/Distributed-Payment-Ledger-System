@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.paymentservice.core.exception.DuplicatedRequestException;
 import org.example.paymentservice.dto.PaymentRequest;
+import org.example.paymentservice.model.CurrencyType;
 import org.example.paymentservice.model.Payment;
 import org.example.paymentservice.model.PaymentStatus;
 import org.example.paymentservice.repository.PaymentRepository;
@@ -60,6 +61,7 @@ public class PaymentServiceImp implements PaymentService {
                         .userId(senderId)
                         .receiverId(request.receiverId())
                         .type(request.type())
+                        .currency(CurrencyType.valueOf(request.currency()))
                         .idempotencyKey(request.idempotencyKey())
                         .amount(request.amount())
                         .status(PaymentStatus.PENDING)
