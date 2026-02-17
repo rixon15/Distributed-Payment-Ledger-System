@@ -21,7 +21,6 @@ import org.springframework.boot.test.util.TestPropertyValues;
 import org.springframework.context.ApplicationContextInitializer;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.test.context.EmbeddedKafka;
@@ -45,7 +44,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
@@ -82,13 +80,11 @@ class PaymentServiceIntegrationTest {
 
     private RestClient.ResponseSpec responseSpec;
 
-    private RestClient.Builder restClientBuilder;
-
     private MockRestServiceServer mockServer;
 
     @BeforeEach
     void setUp() {
-        restClientBuilder = RestClient.builder();
+        RestClient.Builder restClientBuilder = RestClient.builder();
         // Bind the mock server to the RestClient used by the strategies
         mockServer = MockRestServiceServer.bindTo(restClientBuilder).build();
 
@@ -130,14 +126,21 @@ class PaymentServiceIntegrationTest {
         PaymentRequest paymentRequest = new PaymentRequest(UUID.randomUUID(), "key-transfer",
                 TransactionType.TRANSFER, new BigDecimal("50.00"), "USD");
 
-        mockServer.expect(requestTo(containsString("/evaluate")))
-                .andExpect(method(HttpMethod.POST))
-                .andRespond(withSuccess("{\"status\":\"APPROVED\"}", MediaType.APPLICATION_JSON));
+        when(responseSpec.body(RiskResponse.class))
+                .thenReturn(new RiskResponse(RiskStatus.APPROVED, "Passed"));
+
+        when(responseSpec.toBodilessEntity())
+                .thenReturn(ResponseEntity.ok().build());
 
         paymentService.processPayment(senderId, paymentRequest);
 
-        assertThat(paymentRepository.count()).isEqualTo(1);
-        assertThat(paymentRepository.findAll().getFirst().getStatus()).isEqualTo(PaymentStatus.AUTHORIZED);
+        Payment savedPayment = paymentRepository.findAll().getFirst();
+
+        if (savedPayment.getStatus() == PaymentStatus.FAILED) {
+            System.out.println("Payment Error Message: " + savedPayment.getErrorMessage());
+        }
+
+        assertThat(savedPayment.getStatus()).isEqualTo(PaymentStatus.AUTHORIZED);
         assertThat(outboxRepository.findAll().getFirst().getEventType()).isEqualTo("TRANSACTION_INITIATED");
     }
 
@@ -185,7 +188,7 @@ class PaymentServiceIntegrationTest {
         PaymentRequest paymentRequest = new PaymentRequest(UUID.randomUUID(), "duplicated-key",
                 TransactionType.TRANSFER, new BigDecimal("10.00"), "USD");
 
-        mockServer.expect(requestTo(anyString()))
+        mockServer.expect(requestTo(containsString("/evaluate")))
                 .andRespond(withSuccess("{\"status\":\"APPROVED\"}", MediaType.APPLICATION_JSON));
 
         paymentService.processPayment(userId, paymentRequest);

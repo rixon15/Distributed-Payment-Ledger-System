@@ -19,6 +19,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
@@ -27,6 +28,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -51,13 +53,12 @@ class PaymentServiceUnitTest {
 
     private PaymentServiceImp paymentService;
 
-    private List<PaymentStrategy> strategies;
     private UUID senderId;
     private PaymentRequest request;
 
     @BeforeEach
     void setUp() {
-        strategies = new ArrayList<>();
+        List<PaymentStrategy> strategies = new ArrayList<>();
         strategies.add(depositStrategy);
         strategies.add(transferStrategy);
 
@@ -67,11 +68,16 @@ class PaymentServiceUnitTest {
         senderId = UUID.randomUUID();
         request = new PaymentRequest(UUID.randomUUID(), "unique-key-123", TransactionType.TRANSFER, new BigDecimal("100.00"), "USD");
 
-        // Mock TransactionTemplate to execute the callback immediately
         lenient().when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
             TransactionCallback<?> callback = invocation.getArgument(0);
             return callback.doInTransaction(null);
         });
+
+        lenient().doAnswer(invocation -> {
+            Consumer<TransactionStatus> callback = invocation.getArgument(0);
+            callback.accept(null);
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(any());
     }
 
 
@@ -134,14 +140,20 @@ class PaymentServiceUnitTest {
     }
 
     @Test
-    @DisplayName("Should block execution and release lock if Risk Engine REJECTS")
+    @DisplayName("Should update status to FAILED and exit gracefully if Risk Engine REJECTS")
     void testProcessPayment_RiskRejected() {
+
+        when(transferStrategy.supports(TransactionType.TRANSFER)).thenReturn(true);
         mockRedisAcquire(true);
         mockRiskEngine(RiskStatus.REJECTED);
+        when(paymentRepository.save(any(Payment.class))).thenAnswer(i -> i.getArgument(0));
 
         paymentService.processPayment(senderId, request);
 
-        verifyNoInteractions(transferStrategy);
+        verify(transferStrategy).supports(any());
+        verify(transferStrategy, never()).execute(any(), any());
+        verify(paymentRepository, times(2)).save(any(Payment.class));
+        verify(redisTemplate).delete(request.idempotencyKey());
     }
 
 

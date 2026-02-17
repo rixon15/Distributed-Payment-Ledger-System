@@ -56,14 +56,14 @@ public class PaymentServiceImp implements PaymentService {
 
         log.info("Processing payment request for user: {} with idempotencyKey: {}", senderId, request.idempotencyKey());
 
+        checkDuplicatedRequest(request.idempotencyKey());
+
         Optional<Payment> existingPayment = paymentRepository.findByIdempotencyKey(request.idempotencyKey());
 
         if (existingPayment.isPresent()) {
             log.warn("Payment already exists in the DB for key: {}", request.idempotencyKey());
-            return;
+            throw new DuplicatedRequestException("Payment already processed with key: " + request.idempotencyKey());
         }
-
-        checkDuplicatedRequest(request.idempotencyKey());
 
         try {
             PaymentStrategy strategy = strategyList.stream()
@@ -132,7 +132,7 @@ public class PaymentServiceImp implements PaymentService {
                         RedisStringCommands.SetOption.SET_IF_ABSENT
                 ));
 
-        return Boolean.FALSE.equals(success);
+        return Boolean.TRUE.equals(success);
     }
 
     private RiskResponse checkRisk(UUID senderId, PaymentRequest request) {
@@ -161,7 +161,7 @@ public class PaymentServiceImp implements PaymentService {
     }
 
     private void checkDuplicatedRequest(String idempotencyKey) {
-        if (acquire(idempotencyKey)) {
+        if (!acquire(idempotencyKey)) {
             log.warn("Duplicate payment request blocked. Key: {}", idempotencyKey);
             throw new DuplicatedRequestException(idempotencyKey);
         }
