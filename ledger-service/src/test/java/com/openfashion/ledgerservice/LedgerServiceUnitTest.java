@@ -1,9 +1,12 @@
 package com.openfashion.ledgerservice;
 
-import com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException;
-import com.openfashion.ledgerservice.core.exceptions.MissingSystemAccountException;
+import com.openfashion.ledgerservice.core.exceptions.*;
 import com.openfashion.ledgerservice.core.util.MoneyUtil;
+import com.openfashion.ledgerservice.dto.ReleaseRequest;
+import com.openfashion.ledgerservice.dto.ReservationRequest;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
+import com.openfashion.ledgerservice.dto.event.WithdrawalConfirmedEvent;
+import com.openfashion.ledgerservice.dto.event.WithdrawalPayload;
 import com.openfashion.ledgerservice.model.*;
 import com.openfashion.ledgerservice.repository.AccountRepository;
 import com.openfashion.ledgerservice.repository.OutboxRepository;
@@ -22,6 +25,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.StreamSupport;
@@ -49,18 +53,45 @@ class LedgerServiceUnitTest {
 
     private UUID senderId;
     private UUID receiverId;
+    private UUID referenceId;
     private Account senderAccount;
     private Account receiverAccount;
-    private Account systemAccount;
+    private Account worldAccount;
+    private Account withdrawalAccount;
+    private Transaction pendingTransaction;
+    private Posting originalDebit;
+    private Posting pendingCredit;
 
     @BeforeEach
     void setUp() {
         senderId = UUID.randomUUID();
         receiverId = UUID.randomUUID();
+        referenceId = UUID.randomUUID();
 
         senderAccount = createMockAccount(senderId, "Sender", AccountType.ASSET, new BigDecimal("100.00"));
         receiverAccount = createMockAccount(receiverId, "Receiver", AccountType.ASSET, new BigDecimal("50.00"));
-        systemAccount = createMockAccount(null, "WORLD_LIQUIDITY", AccountType.EQUITY, new BigDecimal("1000.00"));
+        worldAccount = createMockAccount(null, "WORLD_LIQUIDITY", AccountType.EQUITY, new BigDecimal("1000.00"));
+        withdrawalAccount = createMockAccount(UUID.randomUUID(), "PENDING_WITHDRAWAL", AccountType.LIABILITY, BigDecimal.ZERO);
+
+        pendingTransaction = new Transaction();
+        pendingTransaction.setId(UUID.randomUUID());
+        pendingTransaction.setReferenceId(referenceId.toString());
+        pendingTransaction.setStatus(TransactionStatus.PENDING);
+
+        // This simulates the original "Reservation" posting we need to look up to find the amount
+        originalDebit = Posting.builder()
+                .account(senderAccount)
+                .amount(new BigDecimal("30.00"))
+                .direction(PostingDirection.DEBIT)
+                .transaction(pendingTransaction)
+                .build();
+
+        pendingCredit = Posting.builder()
+                .account(withdrawalAccount)
+                .amount(new BigDecimal("30.0000"))
+                .direction(PostingDirection.CREDIT)
+                .transaction(pendingTransaction)
+                .build();
     }
 
     @ParameterizedTest
@@ -102,7 +133,7 @@ class LedgerServiceUnitTest {
             when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.of(senderAccount));
             when(accountRepository.findByUserIdAndCurrency(receiverId, CurrencyType.USD)).thenReturn(Optional.of(receiverAccount));
         }
-        
+
         when(transactionRepository.existsByReferenceId(any())).thenReturn(false);
         ledgerService.processTransaction(request);
 
@@ -163,8 +194,8 @@ class LedgerServiceUnitTest {
     }
 
     @Test
-    @DisplayName("Should throw MissingSystemAccountException if WORLD_LIQUIDITY is missing")
-    void testSystemAccountMissing() {
+    @DisplayName("Should throw MissingWorldAccountException if WORLD_LIQUIDITY is missing")
+    void testWorldAccountMissing() {
         TransactionRequest request = createRequest(TransactionType.DEPOSIT, new BigDecimal("100.00"));
 
         when(accountRepository.findByNameAndCurrency(anyString(), any())).thenReturn(Optional.empty());
@@ -200,7 +231,7 @@ class LedgerServiceUnitTest {
         verify(outboxRepository).save(captor.capture());
 
         OutboxEvent savedEvent = captor.getValue();
-        assertThat(savedEvent.getEventType()).isEqualTo("transaction.posted");
+        assertThat(savedEvent.getEventType()).isEqualTo("TRANSACTION_COMPLETED");
         assertThat(savedEvent.getAggregateId()).isEqualTo(request.getReferenceId());
         assertThat(savedEvent.getPayload()).contains(request.getReferenceId());
     }
@@ -220,6 +251,188 @@ class LedgerServiceUnitTest {
         verify(transactionRepository).save(argThat(t -> t.getStatus() == TransactionStatus.POSTED));
     }
 
+    @Test
+    @DisplayName("Should successfully reserve funds and update balances")
+    void testReserveFunds_Success() {
+        ReservationRequest request = new ReservationRequest(senderId, new BigDecimal("30.00"), CurrencyType.USD, referenceId);
+
+        when(transactionRepository.existsByReferenceId(referenceId.toString())).thenReturn(false);
+        when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.of(senderAccount));
+        when(accountRepository.findByNameAndCurrency("PENDING_WITHDRAWAL", CurrencyType.USD)).thenReturn(Optional.of(withdrawalAccount));
+
+        ledgerService.reserveFunds(request);
+
+        assertThat(senderAccount.getBalance()).isEqualByComparingTo("70.00");
+        assertThat(withdrawalAccount.getBalance()).isEqualByComparingTo("30.00");
+
+        verify(transactionRepository).save(argThat(t -> t.getStatus() == TransactionStatus.PENDING));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Posting>> postingCaptor = ArgumentCaptor.forClass(List.class);
+        verify(postingRepository).saveAll(postingCaptor.capture());
+
+        List<Posting> savedPostings = postingCaptor.getValue();
+        assertThat(savedPostings).hasSize(2)
+                .anyMatch(p -> p.getDirection() == PostingDirection.DEBIT &&
+                        p.getAccount() == senderAccount)
+                .anyMatch(p -> p.getDirection() == PostingDirection.CREDIT &&
+                        p.getAccount() == withdrawalAccount);
+    }
+
+    @Test
+    @DisplayName("Should throw InsufficientFundsException when user balance is too low")
+    void testReserveFunds_InsufficientFunds() {
+        ReservationRequest request = new ReservationRequest(senderId, new BigDecimal("150.00"), CurrencyType.USD, referenceId);
+
+        when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.of(senderAccount));
+        when(accountRepository.findByNameAndCurrency("PENDING_WITHDRAWAL", CurrencyType.USD)).thenReturn(Optional.of(withdrawalAccount));
+
+        assertThatThrownBy(() -> ledgerService.reserveFunds(request))
+                .isInstanceOf(InsufficientFundsException.class);
+
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Should throw AccountInactiveException when user account is frozen")
+    void testReserveFunds_AccountFrozen() {
+        senderAccount.setStatus(AccountStatus.FROZEN);
+        ReservationRequest request = new ReservationRequest(senderId, new BigDecimal("30.00"), CurrencyType.USD, referenceId);
+
+        when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.of(senderAccount));
+        when(accountRepository.findByNameAndCurrency("PENDING_WITHDRAWAL", CurrencyType.USD)).thenReturn(Optional.of(withdrawalAccount));
+
+        assertThatThrownBy(() -> ledgerService.reserveFunds(request))
+                .isInstanceOf(AccountInactiveException.class);
+    }
+
+    @Test
+    @DisplayName("Should exit silently if referenceId already exists (Idempotency)")
+    void testReserveFunds_Idempotency() {
+        ReservationRequest request = new ReservationRequest(senderId, new BigDecimal("30.00"), CurrencyType.USD, referenceId);
+
+        when(transactionRepository.existsByReferenceId(referenceId.toString())).thenReturn(true);
+
+        ledgerService.reserveFunds(request);
+
+        verify(accountRepository, never()).save(any());
+        verify(postingRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Should throw AccountNotFoundException if user account does not exist")
+    void testReserveFunds_UserNotFound() {
+        ReservationRequest request = new ReservationRequest(senderId, new BigDecimal("30.00"), CurrencyType.USD, referenceId);
+
+        when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> ledgerService.reserveFunds(request))
+                .isInstanceOf(AccountNotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("Should successfully release reserved funds back to the user")
+    void testReleaseFunds_Success() {
+        ReleaseRequest request = new ReleaseRequest(referenceId);
+
+        when(transactionRepository.findByReferenceId(referenceId.toString())).thenReturn(Optional.of(pendingTransaction));
+        when(postingRepository.findByTransactionAndDirection(pendingTransaction, PostingDirection.DEBIT))
+                .thenReturn(Optional.of(originalDebit));
+        when(accountRepository.findByNameAndCurrency("PENDING_WITHDRAWAL", CurrencyType.USD)).thenReturn(Optional.of(withdrawalAccount));
+
+        ledgerService.releaseFunds(request);
+
+        assertThat(senderAccount.getBalance()).isEqualByComparingTo("130.00");
+        assertThat(withdrawalAccount.getBalance()).isEqualByComparingTo("-30.00");
+        assertThat(pendingTransaction.getStatus()).isEqualTo(TransactionStatus.FAILED);
+        assertThat(pendingTransaction.getMetadata()).contains("Funds released");
+
+        verify(accountRepository).save(senderAccount);
+        verify(accountRepository).save(withdrawalAccount);
+        verify(transactionRepository).save(pendingTransaction);
+        verify(postingRepository).saveAll(anyList());
+    }
+
+    @Test
+    @DisplayName("Should do nothing if transaction is not in PENDING status")
+    void testReleaseFunds_AlreadyProcessed() {
+        pendingTransaction.setStatus(TransactionStatus.POSTED);
+        ReleaseRequest request = new ReleaseRequest(referenceId);
+
+        when(transactionRepository.findByReferenceId(referenceId.toString())).thenReturn(Optional.of(pendingTransaction));
+
+        ledgerService.releaseFunds(request);
+
+        verify(accountRepository, never()).save(any());
+        verify(postingRepository, never()).saveAll(anyList());
+        assertThat(pendingTransaction.getStatus()).isEqualTo(TransactionStatus.POSTED);
+    }
+
+    @Test
+    @DisplayName("Should throw TransactionNotFoundException if referenceId is unknown")
+    void testReleaseFunds_NotFound() {
+        ReleaseRequest request = new ReleaseRequest(referenceId);
+        when(transactionRepository.findByReferenceId(anyString())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> ledgerService.releaseFunds(request))
+                .isInstanceOf(TransactionNotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("Should settle withdrawal: Debit Pending, Credit World Liquidity")
+    void testProcessWithdrawal_Success() {
+        WithdrawalConfirmedEvent event = new WithdrawalConfirmedEvent(referenceId, new WithdrawalPayload(new BigDecimal("30.00"), "USD"));
+
+        when(transactionRepository.findByReferenceId(referenceId.toString())).thenReturn(Optional.of(pendingTransaction));
+        when(postingRepository.findByTransactionAndDirection(pendingTransaction, PostingDirection.CREDIT)).thenReturn(Optional.of(pendingCredit));
+        when(accountRepository.findByNameAndCurrency("WORLD_LIQUIDITY", CurrencyType.USD)).thenReturn(Optional.of(worldAccount));
+
+        ledgerService.processWithdrawal(event);
+
+        assertThat(withdrawalAccount.getBalance()).isEqualByComparingTo("-30.00");
+        assertThat(worldAccount.getBalance()).isEqualByComparingTo("1030.00");
+        assertThat(pendingTransaction.getStatus()).isEqualTo(TransactionStatus.POSTED);
+
+        verify(accountRepository).save(withdrawalAccount);
+        verify(accountRepository).save(worldAccount);
+        verify(transactionRepository).save(pendingTransaction);
+        verify(outboxRepository).save(any());
+    }
+
+    @Test
+    @DisplayName("Should throw DataMismatchException if event amount differs from reserved amount")
+    void testProcessWithdrawal_AmountMismatch() {
+        WithdrawalConfirmedEvent event = new WithdrawalConfirmedEvent(referenceId, new WithdrawalPayload(new BigDecimal("50.00"),"USD"));
+
+        when(transactionRepository.findByReferenceId(referenceId.toString())).thenReturn(Optional.of(pendingTransaction));
+        when(postingRepository.findByTransactionAndDirection(pendingTransaction, PostingDirection.CREDIT)).thenReturn(Optional.of(pendingCredit));
+        lenient().when(accountRepository.findByNameAndCurrency("WORLD_LIQUIDITY", CurrencyType.USD)).thenReturn(Optional.of(worldAccount));
+
+        assertThatThrownBy(() -> ledgerService.processWithdrawal(event))
+                .isInstanceOf(DataMismatchException.class);
+    }
+
+    @Test
+    @DisplayName("Should throw IllegalStateException if transaction is not PENDING")
+    void testProcessWithdrawal_WrongStatus() {
+        pendingTransaction.setStatus(TransactionStatus.FAILED);
+        WithdrawalConfirmedEvent event = new WithdrawalConfirmedEvent(referenceId, new WithdrawalPayload(new BigDecimal("50.00"), "USD"));
+
+        when(transactionRepository.findByReferenceId(referenceId.toString())).thenReturn(Optional.of(pendingTransaction));
+
+        assertThatThrownBy(() -> ledgerService.processWithdrawal(event))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    @DisplayName("Should throw TransactionNotFoundException if referenceId is invalid")
+    void testProcessWithdrawal_NotFound() {
+        WithdrawalConfirmedEvent event = new WithdrawalConfirmedEvent(referenceId, new WithdrawalPayload(new BigDecimal("30.00"), "USD"));
+        when(transactionRepository.findByReferenceId(anyString())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> ledgerService.processWithdrawal(event))
+                .isInstanceOf(TransactionNotFoundException.class);
+    }
 
     private Account createMockAccount(UUID id, String name, AccountType type, BigDecimal balance) {
         Account a = new Account();
@@ -251,20 +464,20 @@ class LedgerServiceUnitTest {
                 lenient().when(accountRepository.findByUserIdAndCurrency(receiverId, CurrencyType.USD)).thenReturn(Optional.of(receiverAccount));
             }
             case DEPOSIT -> {
-                lenient().when(accountRepository.findByNameAndCurrency(eq("WORLD_LIQUIDITY"), any())).thenReturn(Optional.of(systemAccount));
+                lenient().when(accountRepository.findByNameAndCurrency(eq("WORLD_LIQUIDITY"), any())).thenReturn(Optional.of(worldAccount));
                 lenient().when(accountRepository.findByUserIdAndCurrency(receiverId, CurrencyType.USD)).thenReturn(Optional.of(receiverAccount));
             }
             case WITHDRAWAL -> {
                 lenient().when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.of(senderAccount));
-                lenient().when(accountRepository.findByNameAndCurrency(eq("WORLD_LIQUIDITY"), any())).thenReturn(Optional.of(systemAccount));
+                lenient().when(accountRepository.findByNameAndCurrency(eq("WORLD_LIQUIDITY"), any())).thenReturn(Optional.of(worldAccount));
             }
             case FEE -> {
                 lenient().when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.of(senderAccount));
-                lenient().when(accountRepository.findByNameAndCurrency("REVENUE_ACCOUNT", CurrencyType.USD)).thenReturn(Optional.of(systemAccount));
+                lenient().when(accountRepository.findByNameAndCurrency("REVENUE_ACCOUNT", CurrencyType.USD)).thenReturn(Optional.of(worldAccount));
             }
             case INTEREST -> {
                 lenient().when(accountRepository.findByUserIdAndCurrency(receiverId, CurrencyType.USD)).thenReturn(Optional.of(receiverAccount));
-                lenient().when(accountRepository.findByNameAndCurrency("INTEREST_EXPENSE", CurrencyType.USD)).thenReturn(Optional.of(systemAccount));
+                lenient().when(accountRepository.findByNameAndCurrency("INTEREST_EXPENSE", CurrencyType.USD)).thenReturn(Optional.of(worldAccount));
             }
         }
     }

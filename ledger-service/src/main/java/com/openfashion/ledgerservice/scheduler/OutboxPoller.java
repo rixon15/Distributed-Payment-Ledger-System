@@ -1,7 +1,7 @@
 package com.openfashion.ledgerservice.scheduler;
 
 import com.openfashion.ledgerservice.model.OutboxEvent;
-import com.openfashion.ledgerservice.dto.OutboxStatus;
+import com.openfashion.ledgerservice.model.OutboxStatus;
 import com.openfashion.ledgerservice.repository.OutboxRepository;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
@@ -11,6 +11,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @Component
 @Slf4j
@@ -19,29 +22,45 @@ public class OutboxPoller {
 
     private final OutboxRepository outboxRepository;
     private final KafkaTemplate<String, String> kafkaTemplate;
+    private static final String TRANSACTION_POSTED_NAME = "transaction.posted";
 
     @Scheduled(fixedDelay = 2000)
     @Transactional
     public void processOutboxEvent() {
         List<OutboxEvent> events = outboxRepository.findTop50ForProcessing();
 
-        if(events.isEmpty()) return;
+        if (events.isEmpty()) return;
 
         log.info("Polling outbox: found {} events to publish", events.size());
 
-        for(OutboxEvent event : events) {
+        for (OutboxEvent event : events) {
             try {
-                kafkaTemplate.send(event.getEventType(), event.getAggregateId(), event.getPayload());
+                String targetTopic = determineTopic(event.getEventType());
 
+                kafkaTemplate.send(targetTopic, event.getAggregateId(), event.getPayload())
+                        .get(3, TimeUnit.SECONDS);
+
+                event.setStatus(OutboxStatus.PROCESSED);
                 outboxRepository.save(event);
 
                 log.debug("Successfully published event {} to topic {}", event.getId(), event.getEventType());
-            } catch (Exception e) {
-                log.error("Failed to publish outbox event {}:{}", event.getId(), e.getMessage());
-            }
 
-            event.setStatus(OutboxStatus.PROCESSED);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt(); // Restore interrupted status
+                log.error("Thread was interrupted while sending event {}", event.getId());
+            } catch (ExecutionException | TimeoutException e) {
+                log.error("Failed to publish outbox event {}: {}", event.getId(), e.getCause().getMessage());
+            } catch (Exception e) {
+                log.error("Unexpected error processing event {}: {}", event.getId(), e.getMessage());
+            }
         }
     }
 
+    private String determineTopic(String eventType) {
+        return switch (eventType) {
+            case "TRANSACTION_COMPLETED", "WITHDRAWAL_SETTLED" -> TRANSACTION_POSTED_NAME;
+            case "TRANSACTION_FAILED" -> "transaction.failed";
+            case null, default -> "transaction.unknown";
+        };
+    }
 }

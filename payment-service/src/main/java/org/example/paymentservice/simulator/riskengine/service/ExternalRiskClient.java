@@ -1,5 +1,6 @@
 package org.example.paymentservice.simulator.riskengine.service;
 
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.paymentservice.simulator.riskengine.dto.RiskRequest;
 import org.example.paymentservice.simulator.riskengine.dto.RiskResponse;
@@ -11,21 +12,19 @@ import org.springframework.web.client.RestClient;
 
 @Component
 @Slf4j
+@RequiredArgsConstructor
 public class ExternalRiskClient {
 
     private final RestClient restClient;
 
-    public ExternalRiskClient(
-            RestClient.Builder builder,
-            @Value("${app.risk-engine.url}") String riskUrl
-    ) {
-        this.restClient = builder.baseUrl(riskUrl).build();
-    }
+    @Value("${app.risk-engine.url}")
+    private String riskUrl;
+
 
     public RiskResponse evaluate(RiskRequest request) {
         try {
             return restClient.post()
-                    .uri("/evaluate")
+                    .uri(riskUrl + "/evaluate")
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(request)
                     .retrieve()

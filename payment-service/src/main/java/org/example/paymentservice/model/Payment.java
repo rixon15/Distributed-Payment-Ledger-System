@@ -5,6 +5,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.example.paymentservice.dto.PaymentRequest;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
@@ -49,6 +50,10 @@ public class Payment {
 
     @Column(nullable = false)
     @Enumerated(EnumType.STRING)
+    private CurrencyType currency;
+
+    @Column(nullable = false)
+    @Enumerated(EnumType.STRING)
     private PaymentStatus status;
 
     //This allows better tracking of the money, helps with investigations
@@ -66,4 +71,13 @@ public class Payment {
     @Version
     private Long version;
 
+    public PaymentRequest mapToRequest() {
+        return new PaymentRequest(
+                this.receiverId,
+                this.idempotencyKey,
+                this.type,
+                this.amount,
+                this.currency.toString()
+        );
+    }
 }

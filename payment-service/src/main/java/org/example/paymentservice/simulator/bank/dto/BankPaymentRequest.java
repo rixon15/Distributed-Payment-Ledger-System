@@ -5,7 +5,7 @@ import java.util.UUID;
 
 public record BankPaymentRequest(
         UUID referenceId,
-        UUID accountId,
+        String accountId,
         BigDecimal amount,
         String currency
 ) {}
