@@ -4,10 +4,8 @@ import com.openfashion.ledgerservice.core.exceptions.*;
 import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.ReleaseRequest;
 import com.openfashion.ledgerservice.dto.ReservationRequest;
-import com.openfashion.ledgerservice.dto.event.WithdrawalConfirmedEvent;
-import com.openfashion.ledgerservice.model.OutboxEvent;
-import com.openfashion.ledgerservice.model.OutboxStatus;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
+import com.openfashion.ledgerservice.dto.event.WithdrawalConfirmedEvent;
 import com.openfashion.ledgerservice.model.*;
 import com.openfashion.ledgerservice.repository.AccountRepository;
 import com.openfashion.ledgerservice.repository.OutboxRepository;
@@ -21,7 +19,6 @@ import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -46,7 +43,7 @@ public class LedgerServiceImp implements LedgerService {
     private static final String WITHDRAWAL_ACCOUNT_NAME = "PENDING_WITHDRAWAL";
     private static final String WORLD_ACCOUNT_NAME = "WORLD_LIQUIDITY";
 
-    @Transactional(isolation = Isolation.SERIALIZABLE)
+    @Transactional
     @Retryable(
             retryFor = OptimisticLockingFailureException.class,
             maxAttempts = 4,
