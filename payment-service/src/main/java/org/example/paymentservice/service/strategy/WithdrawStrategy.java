@@ -19,6 +19,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.UUID;
+
 @Component
 @Slf4j
 public class WithdrawStrategy extends PaymentStrategy {
@@ -62,6 +64,12 @@ public class WithdrawStrategy extends PaymentStrategy {
             return;
         }
 
+        if (payment.getExternalTransactionId() != null) {
+            log.info("Payment {} already has external ID. Skipping bank call.", payment.getId());
+            finalizeStatus(payment, PaymentStatus.AUTHORIZED, UUID.fromString(payment.getExternalTransactionId()));
+            return;
+        }
+
         BankPaymentRequest bankRequest = new BankPaymentRequest(
                 payment.getId(),
                 "EXT-ACCT-" + payment.getUserId(),
@@ -69,12 +77,19 @@ public class WithdrawStrategy extends PaymentStrategy {
                 payment.getCurrency().getCode()
         );
 
-        BankPaymentResponse bankResult = restClient.post()
-                .uri(bankUrl + "/pay")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(bankRequest)
-                .retrieve()
-                .body(BankPaymentResponse.class);
+        BankPaymentResponse bankResult;
+        try {
+            bankResult = restClient.post()
+                    .uri(bankUrl + "/pay")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(bankRequest)
+                    .retrieve()
+                    .body(BankPaymentResponse.class);
+        } catch (Exception e) {
+            // Network error? The Recovery Scheduler will pick this up and retry.
+            // We do NOT release the reservation yet, because we don't know if the money moved.
+            throw new IllegalStateException("Bank call failed, will retry", e);
+        }
 
         if (bankResult == null) {
             throw new IllegalStateException("Failed to post to bank api");
@@ -83,19 +98,24 @@ public class WithdrawStrategy extends PaymentStrategy {
         if (bankResult.status().equals(BankPaymentStatus.APPROVED)) {
             finalizeStatus(payment, PaymentStatus.AUTHORIZED, bankResult.transactionId());
         } else {
-            try {
-                restClient.post()
-                        .uri(ledgerUrl + "/accounts/release-reserve")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body(new ReleaseRequest(payment.getId()))
-                        .retrieve()
-                        .toBodilessEntity();
+            rollbackReservation(payment);
 
-            } catch (Exception _) {
-                log.error("CRITICAL: Failed to release reserve for payment {}", payment.getId());
-                //Notes: This should create a manual review event?
-            }
             handleFailure(payment, "Bank Declined: " + bankResult.reasonCode(), bankResult.reasonCode());
+        }
+    }
+
+    private void rollbackReservation(Payment payment) {
+        try {
+            restClient.post()
+                    .uri(ledgerUrl + "/accounts/release-reserve")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(new ReleaseRequest(payment.getId()))
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (Exception e) {
+            log.error("CRITICAL: Failed to release reserve for payment {}", payment.getId(), e);
+            payment.setStatus(PaymentStatus.MANUAL_REVIEW);
+            paymentRepository.save(payment);
         }
     }
 }

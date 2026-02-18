@@ -1,11 +1,11 @@
 CREATE TABLE outbox_events
 (
-    id           UUID                        NOT NULL,
-    aggregate_id VARCHAR(255)                NOT NULL,
-    event_type   VARCHAR(255)                NOT NULL,
-    payload      JSONB                       NOT NULL,
-    status       VARCHAR(255)                NOT NULL,
-    created_at   TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    id           UUID                     NOT NULL,
+    aggregate_id VARCHAR(255)             NOT NULL,
+    event_type   VARCHAR(255)             NOT NULL,
+    payload      JSONB                    NOT NULL,
+    status       VARCHAR(255)             NOT NULL,
+    created_at   TIMESTAMP WITH TIME ZONE NOT NULL,
     CONSTRAINT pk_outbox_events PRIMARY KEY (id)
 );
 

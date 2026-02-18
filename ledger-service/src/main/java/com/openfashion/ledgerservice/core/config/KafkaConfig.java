@@ -1,7 +1,7 @@
 package com.openfashion.ledgerservice.core.config;
 
 import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
-import com.openfashion.ledgerservice.dto.event.WithdrawalCompleteEvent;
+import com.openfashion.ledgerservice.dto.event.WithdrawalConfirmedEvent;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -58,7 +58,7 @@ public class KafkaConfig {
     }
 
     @Bean
-    public ConsumerFactory<String, WithdrawalCompleteEvent> withdrawalConsumerFactory() {
+    public ConsumerFactory<String, WithdrawalConfirmedEvent> withdrawalConsumerFactory() {
         Map<String, Object> props = new HashMap<>();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
@@ -66,7 +66,7 @@ public class KafkaConfig {
 
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
 
-        JsonDeserializer<WithdrawalCompleteEvent> jsonDeserializer = new JsonDeserializer<>(WithdrawalCompleteEvent.class);
+        JsonDeserializer<WithdrawalConfirmedEvent> jsonDeserializer = new JsonDeserializer<>(WithdrawalConfirmedEvent.class);
         jsonDeserializer.addTrustedPackages("com.openfashion.ledgerservice.dto.event");
 
         return new DefaultKafkaConsumerFactory<>(
@@ -77,8 +77,8 @@ public class KafkaConfig {
     }
 
     @Bean
-    public ConcurrentKafkaListenerContainerFactory<String, WithdrawalCompleteEvent> withdrawalKafkaListenerContainerFactory() {
-        ConcurrentKafkaListenerContainerFactory<String, WithdrawalCompleteEvent> factory =
+    public ConcurrentKafkaListenerContainerFactory<String, WithdrawalConfirmedEvent> withdrawalKafkaListenerContainerFactory() {
+        ConcurrentKafkaListenerContainerFactory<String, WithdrawalConfirmedEvent> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(withdrawalConsumerFactory());
 

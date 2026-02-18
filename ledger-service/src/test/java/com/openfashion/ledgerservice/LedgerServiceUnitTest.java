@@ -5,7 +5,8 @@ import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.ReleaseRequest;
 import com.openfashion.ledgerservice.dto.ReservationRequest;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
-import com.openfashion.ledgerservice.dto.event.WithdrawalCompleteEvent;
+import com.openfashion.ledgerservice.dto.event.WithdrawalConfirmedEvent;
+import com.openfashion.ledgerservice.dto.event.WithdrawalPayload;
 import com.openfashion.ledgerservice.model.*;
 import com.openfashion.ledgerservice.repository.AccountRepository;
 import com.openfashion.ledgerservice.repository.OutboxRepository;
@@ -230,7 +231,7 @@ class LedgerServiceUnitTest {
         verify(outboxRepository).save(captor.capture());
 
         OutboxEvent savedEvent = captor.getValue();
-        assertThat(savedEvent.getEventType()).isEqualTo("transaction.posted");
+        assertThat(savedEvent.getEventType()).isEqualTo("TRANSACTION_COMPLETED");
         assertThat(savedEvent.getAggregateId()).isEqualTo(request.getReferenceId());
         assertThat(savedEvent.getPayload()).contains(request.getReferenceId());
     }
@@ -380,7 +381,7 @@ class LedgerServiceUnitTest {
     @Test
     @DisplayName("Should settle withdrawal: Debit Pending, Credit World Liquidity")
     void testProcessWithdrawal_Success() {
-        WithdrawalCompleteEvent event = new WithdrawalCompleteEvent(referenceId, new BigDecimal("30.00"), CurrencyType.USD);
+        WithdrawalConfirmedEvent event = new WithdrawalConfirmedEvent(referenceId, new WithdrawalPayload(new BigDecimal("30.00"), "USD"));
 
         when(transactionRepository.findByReferenceId(referenceId.toString())).thenReturn(Optional.of(pendingTransaction));
         when(postingRepository.findByTransactionAndDirection(pendingTransaction, PostingDirection.CREDIT)).thenReturn(Optional.of(pendingCredit));
@@ -401,7 +402,7 @@ class LedgerServiceUnitTest {
     @Test
     @DisplayName("Should throw DataMismatchException if event amount differs from reserved amount")
     void testProcessWithdrawal_AmountMismatch() {
-        WithdrawalCompleteEvent event = new WithdrawalCompleteEvent(referenceId, new BigDecimal("50.00"), CurrencyType.USD);
+        WithdrawalConfirmedEvent event = new WithdrawalConfirmedEvent(referenceId, new WithdrawalPayload(new BigDecimal("50.00"),"USD"));
 
         when(transactionRepository.findByReferenceId(referenceId.toString())).thenReturn(Optional.of(pendingTransaction));
         when(postingRepository.findByTransactionAndDirection(pendingTransaction, PostingDirection.CREDIT)).thenReturn(Optional.of(pendingCredit));
@@ -415,7 +416,7 @@ class LedgerServiceUnitTest {
     @DisplayName("Should throw IllegalStateException if transaction is not PENDING")
     void testProcessWithdrawal_WrongStatus() {
         pendingTransaction.setStatus(TransactionStatus.FAILED);
-        WithdrawalCompleteEvent event = new WithdrawalCompleteEvent(referenceId, new BigDecimal("50.00"), CurrencyType.USD);
+        WithdrawalConfirmedEvent event = new WithdrawalConfirmedEvent(referenceId, new WithdrawalPayload(new BigDecimal("50.00"), "USD"));
 
         when(transactionRepository.findByReferenceId(referenceId.toString())).thenReturn(Optional.of(pendingTransaction));
 
@@ -426,7 +427,7 @@ class LedgerServiceUnitTest {
     @Test
     @DisplayName("Should throw TransactionNotFoundException if referenceId is invalid")
     void testProcessWithdrawal_NotFound() {
-        WithdrawalCompleteEvent event = new WithdrawalCompleteEvent(referenceId, new BigDecimal("30.00"), CurrencyType.USD);
+        WithdrawalConfirmedEvent event = new WithdrawalConfirmedEvent(referenceId, new WithdrawalPayload(new BigDecimal("30.00"), "USD"));
         when(transactionRepository.findByReferenceId(anyString())).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> ledgerService.processWithdrawal(event))

@@ -17,8 +17,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
-import java.util.UUID;
-
 @Component
 @Slf4j
 public class DepositStrategy extends PaymentStrategy {
@@ -44,7 +42,7 @@ public class DepositStrategy extends PaymentStrategy {
         log.info("Initiating Deposit for user: {}", payment.getUserId());
 
         BankPaymentRequest bankRequest = new BankPaymentRequest(
-                UUID.randomUUID(), //Unique ref for the bank
+                payment.getId(), //Unique ref for the bank
                 "src_card_" + payment.getUserId(), // Mocked source account token
                 request.amount(),
                 request.currency()

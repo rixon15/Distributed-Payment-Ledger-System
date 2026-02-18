@@ -1,13 +1,13 @@
 package org.example.paymentservice.service.implementation;
 
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.paymentservice.core.exception.DuplicatedRequestException;
+import org.example.paymentservice.core.exception.PaymentNotFoundException;
 import org.example.paymentservice.dto.PaymentRequest;
-import org.example.paymentservice.model.CurrencyType;
-import org.example.paymentservice.model.Payment;
-import org.example.paymentservice.model.PaymentStatus;
-import org.example.paymentservice.model.TransactionType;
+import org.example.paymentservice.model.*;
+import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
 import org.example.paymentservice.service.PaymentService;
 import org.example.paymentservice.service.strategy.PaymentStrategy;
@@ -20,14 +20,15 @@ import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.types.Expiration;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
+import tools.jackson.databind.ObjectMapper;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.*;
 
 @Service
 @RequiredArgsConstructor
@@ -39,12 +40,41 @@ public class PaymentServiceImp implements PaymentService {
     private final RedisTemplate<String, String> redisTemplate;
     private final RestClient restClient;
     private final TransactionTemplate tx;
+    private final OutboxRepository outboxRepository;
+    private final ObjectMapper objectMapper;
+
+
+    private final Map<TransactionType, PaymentStrategy> strategyMap = new EnumMap<>(TransactionType.class);
 
     @Value("${app.risk-engine.url}")
     private String riskEngineUrl;
 
+    //We created this map to have O(1) lookup instead of O(n)
+    @PostConstruct
+    public void initStrategies() {
+        log.info("Initializing Payment Strategies...");
+
+        for (TransactionType type : TransactionType.values()) {
+            strategyList.stream()
+                    .filter(strategy -> strategy.supports(type))
+                    .findFirst()
+                    .ifPresentOrElse(
+                            strategy -> strategyMap.put(type, strategy),
+                            () -> log.warn("No strategy found for TransactionType: {}", type)
+                    );
+        }
+
+        log.info("Strategy Map built with {} entries", strategyMap.size());
+    }
+
     @Override
     public void processPayment(UUID senderId, PaymentRequest request) {
+
+        PaymentStrategy strategy = strategyMap.get(request.type());
+
+        if (strategy == null) {
+            throw new UnsupportedOperationException("No strategy found for type: " + request.type());
+        }
 
         UUID receiverId;
 
@@ -62,14 +92,11 @@ public class PaymentServiceImp implements PaymentService {
 
         if (existingPayment.isPresent()) {
             log.warn("Payment already exists in the DB for key: {}", request.idempotencyKey());
+            redisTemplate.delete(request.idempotencyKey());
             throw new DuplicatedRequestException("Payment already processed with key: " + request.idempotencyKey());
         }
 
         try {
-            PaymentStrategy strategy = strategyList.stream()
-                    .filter(s -> s.supports(request.type()))
-                    .findFirst()
-                    .orElseThrow(() -> new UnsupportedOperationException("Strategy not supported"));
 
             Payment payment = tx.execute(_ -> paymentRepository.save(
                     Payment.builder()
@@ -90,6 +117,11 @@ public class PaymentServiceImp implements PaymentService {
                 return;
             }
 
+            if (riskResult.status() == RiskStatus.MANUAL_REVIEW) {
+                handleManualReview(payment, riskResult.reason());
+                return;
+            }
+
             strategy.execute(payment, request);
         } catch (Exception e) {
             log.error("Payment processing failed for key: {}. Releasing Redis lock", request.idempotencyKey());
@@ -99,9 +131,18 @@ public class PaymentServiceImp implements PaymentService {
     }
 
     @Override
-    public void resumeProcessing(Payment payment) {
-        log.info("Retrying payment request for user: {} with idempotencyKey: {}", payment.getUserId(), payment.getIdempotencyKey());
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void resumeProcessing(UUID paymentId) {
 
+        Payment payment = paymentRepository.findById(paymentId)
+                .orElseThrow(() -> new PaymentNotFoundException(paymentId));
+
+        log.info("Resuming processing for payment {}", payment.getId());
+
+        if (payment.getStatus() != PaymentStatus.RECOVERING && payment.getStatus() != PaymentStatus.PENDING) {
+            log.warn("Payment {} is not in a resumable state (Status: {}). Skipping.", paymentId, payment.getStatus());
+            return;
+        }
         PaymentRequest request = payment.mapToRequest();
 
         PaymentStrategy strategy = strategyList.stream()
@@ -167,4 +208,40 @@ public class PaymentServiceImp implements PaymentService {
         }
     }
 
+    private void handleManualReview(Payment payment, String reason) {
+        log.warn("Payment {} flagged for MANUAL REVIEW: {}", payment.getId(), reason);
+
+        payment.setStatus(PaymentStatus.MANUAL_REVIEW);
+        payment.setErrorMessage(reason);
+        payment.setUpdatedAt(LocalDateTime.now());
+
+        paymentRepository.save(payment);
+
+        outboxRepository.save(
+                OutboxEvent.builder()
+                        .aggregateId(payment.getId().toString())
+                        .eventType("PAYMENT_HELD_FOR_REVIEW")
+                        .payload(objectMapper.writeValueAsString(payment))
+                        .build()
+        );
+    }
+
+    @Transactional
+    public List<UUID> claimStuckPayments(int batchSize) {
+        LocalDateTime threshold = LocalDateTime.now().minusMinutes(5);
+
+        List<Payment> stuckPayments = paymentRepository.findStuckPaymentsForRecovery(threshold, batchSize);
+
+        List<UUID> claimedIds = new ArrayList<>();
+
+        for (Payment p : stuckPayments) {
+            p.setStatus(PaymentStatus.RECOVERING);
+            p.setUpdatedAt(LocalDateTime.now());
+            claimedIds.add(p.getId());
+        }
+
+        paymentRepository.saveAll(stuckPayments);
+
+        return claimedIds;
+    }
 }

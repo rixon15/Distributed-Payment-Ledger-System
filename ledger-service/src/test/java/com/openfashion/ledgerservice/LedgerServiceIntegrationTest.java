@@ -3,7 +3,8 @@ package com.openfashion.ledgerservice;
 import com.openfashion.ledgerservice.dto.ReleaseRequest;
 import com.openfashion.ledgerservice.dto.ReservationRequest;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
-import com.openfashion.ledgerservice.dto.event.WithdrawalCompleteEvent;
+import com.openfashion.ledgerservice.dto.event.WithdrawalConfirmedEvent;
+import com.openfashion.ledgerservice.dto.event.WithdrawalPayload;
 import com.openfashion.ledgerservice.model.*;
 import com.openfashion.ledgerservice.repository.AccountRepository;
 import com.openfashion.ledgerservice.repository.OutboxRepository;
@@ -192,7 +193,7 @@ class LedgerServiceIntegrationTest {
         assertThat(pendingAcc.getBalance()).isEqualByComparingTo("40.00");
         assertThat(transactionRepository.existsByReferenceId(referenceId.toString())).isTrue();
 
-        WithdrawalCompleteEvent settleEvent = new WithdrawalCompleteEvent(referenceId, amount, CurrencyType.USD);
+        WithdrawalConfirmedEvent settleEvent = new WithdrawalConfirmedEvent(referenceId,new WithdrawalPayload( amount, "USD"));
         ledgerService.processWithdrawal(settleEvent);
 
         Account finalPendingAcc = accountRepository.findByNameAndCurrency(PENDING_NAME, CurrencyType.USD).orElseThrow();

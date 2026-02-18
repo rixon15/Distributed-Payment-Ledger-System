@@ -19,12 +19,15 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     Optional<Payment> findByIdempotencyKey(@NotBlank String s);
 
     @Query(value = """
-            SELECT * FROM payments
-            WHERE status = 'PENDING'
-            AND created_at < :threshold
-            ORDER BY created_at
-            LIMIT 50
-            FOR UPDATE SKIP LOCKED
-            """, nativeQuery = true)
-    List<Payment> findStuckPaymentsForRecovery(@Param("threshold") LocalDateTime threshold);
+        SELECT * FROM payments
+        WHERE status = 'PENDING'
+        AND updated_at < :threshold
+        ORDER BY updated_at
+        LIMIT :limit
+        FOR UPDATE SKIP LOCKED
+        """, nativeQuery = true)
+    List<Payment> findStuckPaymentsForRecovery(
+            @Param("threshold") LocalDateTime threshold,
+            @Param("limit") int limit
+    );
 }

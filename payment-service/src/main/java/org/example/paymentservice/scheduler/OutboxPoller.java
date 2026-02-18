@@ -11,6 +11,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @Component
 @Slf4j
@@ -31,14 +34,21 @@ public class OutboxPoller {
             try {
                 String targetTopic = determineTopic(event.getEventType());
 
-                kafkaTemplate.send(targetTopic, event.getAggregateId(), event.getPayload());
+                kafkaTemplate.send(targetTopic, event.getAggregateId(), event.getPayload())
+                        .get(3, TimeUnit.SECONDS);
 
                 event.setStatus(OutboxStatus.PROCESSED);
                 outboxRepository.save(event);
 
-                log.debug("Published event {} to topic {}", event.getId(), targetTopic);
+                log.debug("Successfully published event {} to topic {}", event.getId(), event.getEventType());
+
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt(); // Restore interrupted status
+                log.error("Thread was interrupted while sending event {}", event.getId());
+            } catch (ExecutionException | TimeoutException e) {
+                log.error("Failed to publish outbox event {}: {}", event.getId(), e.getCause().getMessage());
             } catch (Exception e) {
-                log.error("Failed to publish outbox event {}: {}", event.getId(), e.getMessage());
+                log.error("Unexpected error processing event {}: {}", event.getId(), e.getMessage());
             }
         }
     }

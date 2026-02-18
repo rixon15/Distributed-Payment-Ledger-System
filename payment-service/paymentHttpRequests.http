@@ -5,7 +5,7 @@ Content-Type: application/json
 
 {
   "receiverId": "22222222-2222-2222-2222-222222222222",
-  "idempotencyKey": "transfer-unique-key-011",
+  "idempotencyKey": "transfer-unique-key-06",
   "type": "TRANSFER",
   "amount": 50.00,
   "currency": "USD"

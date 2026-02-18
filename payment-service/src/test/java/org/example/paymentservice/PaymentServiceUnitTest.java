@@ -4,7 +4,9 @@ import org.example.paymentservice.core.exception.DuplicatedRequestException;
 import org.example.paymentservice.dto.PaymentRequest;
 import org.example.paymentservice.model.CurrencyType;
 import org.example.paymentservice.model.Payment;
+import org.example.paymentservice.model.PaymentStatus;
 import org.example.paymentservice.model.TransactionType;
+import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
 import org.example.paymentservice.service.implementation.PaymentServiceImp;
 import org.example.paymentservice.service.strategy.PaymentStrategy;
@@ -16,6 +18,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -23,10 +26,12 @@ import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
+import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Consumer;
 
@@ -51,6 +56,11 @@ class PaymentServiceUnitTest {
     @Mock
     private PaymentStrategy transferStrategy;
 
+    @Mock
+    private OutboxRepository outboxRepository;
+    @Mock
+    private ObjectMapper objectMapper;
+
     private PaymentServiceImp paymentService;
 
     private UUID senderId;
@@ -62,22 +72,27 @@ class PaymentServiceUnitTest {
         strategies.add(depositStrategy);
         strategies.add(transferStrategy);
 
-        // Use reflection or constructor to inject the strategies list if @InjectMocks doesn't handle it
-        paymentService = new PaymentServiceImp(paymentRepository, strategies, redisTemplate, restClient, transactionTemplate);
+        lenient().when(depositStrategy.supports(TransactionType.DEPOSIT)).thenReturn(true);
+        lenient().when(transferStrategy.supports(TransactionType.TRANSFER)).thenReturn(true);
+
+        paymentService = new PaymentServiceImp(
+                paymentRepository,
+                strategies,
+                redisTemplate,
+                restClient,
+                transactionTemplate,
+                outboxRepository,
+                objectMapper
+        );
+
+        paymentService.initStrategies();
+
+        Mockito.clearInvocations(depositStrategy, transferStrategy, redisTemplate);
 
         senderId = UUID.randomUUID();
         request = new PaymentRequest(UUID.randomUUID(), "unique-key-123", TransactionType.TRANSFER, new BigDecimal("100.00"), "USD");
 
-        lenient().when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
-            TransactionCallback<?> callback = invocation.getArgument(0);
-            return callback.doInTransaction(null);
-        });
-
-        lenient().doAnswer(invocation -> {
-            Consumer<TransactionStatus> callback = invocation.getArgument(0);
-            callback.accept(null);
-            return null;
-        }).when(transactionTemplate).executeWithoutResult(any());
+        setupTransactionMocks();
     }
 
 
@@ -85,9 +100,8 @@ class PaymentServiceUnitTest {
     @DisplayName("Should process payment successfully when it's a new request")
     void testProcessPayment_Success() {
         mockRedisAcquire(true);
-        when(transferStrategy.supports(TransactionType.TRANSFER)).thenReturn(true);
-        when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
 
+        when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
         mockRiskEngine(RiskStatus.APPROVED);
 
         paymentService.processPayment(senderId, request);
@@ -111,54 +125,56 @@ class PaymentServiceUnitTest {
     @Test
     @DisplayName("Should resume processing using correct strategy")
     void testResumeProcessing() {
+        UUID paymentId = UUID.randomUUID();
         Payment payment = Payment.builder()
-                .id(UUID.randomUUID())
+                .id(paymentId)
                 .userId(senderId)
                 .idempotencyKey("resume-key")
                 .type(TransactionType.DEPOSIT)
                 .amount(new BigDecimal("50.00"))
                 .currency(CurrencyType.USD)
+                .status(PaymentStatus.RECOVERING) // <--- Important for your check
                 .build();
 
-        when(depositStrategy.supports(TransactionType.DEPOSIT)).thenReturn(true);
+        when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(payment));
+
         mockRiskEngine(RiskStatus.APPROVED);
 
-        paymentService.resumeProcessing(payment);
+        paymentService.resumeProcessing(paymentId);
 
-        verify(depositStrategy).execute(any(Payment.class), any(PaymentRequest.class));
+        verify(depositStrategy).execute(any(Payment.class), any());
     }
 
     @Test
     @DisplayName("Should throw exception if no strategy supports the type")
     void testProcessPayment_NoStrategy() {
         mockRedisAcquire(true);
-        when(depositStrategy.supports(any())).thenReturn(false);
-        when(transferStrategy.supports(any())).thenReturn(false);
 
-        assertThatThrownBy(() -> paymentService.processPayment(senderId, request))
+        PaymentRequest invalidRequest = new PaymentRequest(UUID.randomUUID(), "key", TransactionType.WITHDRAWAL, BigDecimal.TEN, "USD");
+
+        mockRiskEngine(RiskStatus.APPROVED);
+
+        assertThatThrownBy(() -> paymentService.processPayment(senderId, invalidRequest))
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
     @Test
     @DisplayName("Should update status to FAILED and exit gracefully if Risk Engine REJECTS")
     void testProcessPayment_RiskRejected() {
-
-        when(transferStrategy.supports(TransactionType.TRANSFER)).thenReturn(true);
         mockRedisAcquire(true);
         mockRiskEngine(RiskStatus.REJECTED);
         when(paymentRepository.save(any(Payment.class))).thenAnswer(i -> i.getArgument(0));
 
         paymentService.processPayment(senderId, request);
 
-        verify(transferStrategy).supports(any());
         verify(transferStrategy, never()).execute(any(), any());
-        verify(paymentRepository, times(2)).save(any(Payment.class));
+        verify(paymentRepository, times(2)).save(any(Payment.class)); // Created + Updated
         verify(redisTemplate).delete(request.idempotencyKey());
     }
 
 
     private void mockRedisAcquire(boolean success) {
-        when(redisTemplate.execute(any(RedisCallback.class))).thenReturn(success);
+        lenient().when(redisTemplate.execute(any(RedisCallback.class))).thenReturn(success);
     }
 
     private void mockRiskEngine(RiskStatus status) {
@@ -171,5 +187,17 @@ class PaymentServiceUnitTest {
         lenient().when(requestBodySpec.body(any(RiskRequest.class))).thenReturn(requestBodySpec);
         lenient().when(requestBodySpec.retrieve()).thenReturn(responseSpec);
         lenient().when(responseSpec.body(RiskResponse.class)).thenReturn(new RiskResponse(status, "Verified"));
+    }
+
+    private void setupTransactionMocks() {
+        lenient().when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(null);
+        });
+        lenient().doAnswer(invocation -> {
+            Consumer<TransactionStatus> callback = invocation.getArgument(0);
+            callback.accept(null);
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(any());
     }
 }
