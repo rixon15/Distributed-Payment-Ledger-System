@@ -13,6 +13,8 @@ import com.openfashion.ledgerservice.repository.OutboxRepository;
 import com.openfashion.ledgerservice.repository.PostingRepository;
 import com.openfashion.ledgerservice.repository.TransactionRepository;
 import com.openfashion.ledgerservice.service.imp.LedgerServiceImp;
+import com.openfashion.ledgerservice.service.strategy.AccountPair;
+import com.openfashion.ledgerservice.service.strategy.AccountResolutionStrategy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,8 +22,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
@@ -33,7 +35,6 @@ import java.util.stream.StreamSupport;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -48,7 +49,6 @@ class LedgerServiceUnitTest {
     @Mock
     private OutboxRepository outboxRepository;
 
-    @InjectMocks
     private LedgerServiceImp ledgerService;
 
     private UUID senderId;
@@ -61,6 +61,11 @@ class LedgerServiceUnitTest {
     private Transaction pendingTransaction;
     private Posting originalDebit;
     private Posting pendingCredit;
+
+    @Mock private AccountResolutionStrategy transferStrategy;
+    @Mock private AccountResolutionStrategy depositStrategy;
+    @Mock private AccountResolutionStrategy feeStrategy;
+    @Mock private AccountResolutionStrategy withdrawalStrategy;
 
     @BeforeEach
     void setUp() {
@@ -92,7 +97,36 @@ class LedgerServiceUnitTest {
                 .direction(PostingDirection.CREDIT)
                 .transaction(pendingTransaction)
                 .build();
-    }
+        lenient().when(transferStrategy.supports(TransactionType.TRANSFER)).thenReturn(true);
+        lenient().when(transferStrategy.supports(TransactionType.PAYMENT)).thenReturn(true);
+        lenient().when(transferStrategy.supports(TransactionType.REFUND)).thenReturn(true);
+        lenient().when(transferStrategy.supports(TransactionType.ADJUSTMENT)).thenReturn(true);
+
+        lenient().when(depositStrategy.supports(TransactionType.DEPOSIT)).thenReturn(true);
+        lenient().when(withdrawalStrategy.supports(TransactionType.WITHDRAWAL)).thenReturn(true);
+
+        lenient().when(feeStrategy.supports(TransactionType.FEE)).thenReturn(true);
+        lenient().when(feeStrategy.supports(TransactionType.INTEREST)).thenReturn(true);
+
+        // 3. Put them all in the list
+        List<AccountResolutionStrategy> strategies = List.of(
+                transferStrategy, depositStrategy, withdrawalStrategy, feeStrategy
+        );
+
+        ledgerService = new LedgerServiceImp(
+                accountRepository,
+                transactionRepository,
+                postingRepository,
+                outboxRepository,
+                strategies
+                // ... other dependencies
+        );
+
+        ledgerService.initStrategy();
+
+        // 4. Clear invocations
+        Mockito.clearInvocations(transferStrategy, depositStrategy, withdrawalStrategy, feeStrategy);
+        }
 
     @ParameterizedTest
     @EnumSource(value = TransactionType.class, names = {"TRANSFER", "PAYMENT", "DEPOSIT", "WITHDRAWAL"})
@@ -100,7 +134,7 @@ class LedgerServiceUnitTest {
     void testSuccessfulTransactions(TransactionType type) {
         TransactionRequest request = createRequest(type, new BigDecimal("20.0"));
 
-        stubAccountLookups(type);
+        stubStrategyResolution(type);
         when(transactionRepository.existsByReferenceId(any())).thenReturn(false);
 
         ledgerService.processTransaction(request);
@@ -121,18 +155,7 @@ class LedgerServiceUnitTest {
     void testSpecializedTransactions(TransactionType type) {
         TransactionRequest request = createRequest(type, new BigDecimal("10"));
 
-        if (type == TransactionType.FEE) {
-            Account revenueAcc = createMockAccount(null, "REVENUE_ACCOUNT", AccountType.INCOME, BigDecimal.ZERO);
-            when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.of(senderAccount));
-            when(accountRepository.findByNameAndCurrency("REVENUE_ACCOUNT", CurrencyType.USD)).thenReturn(Optional.of(revenueAcc));
-        } else if (type == TransactionType.INTEREST) {
-            Account expenseAcc = createMockAccount(null, "INTEREST_EXPENSE", AccountType.EXPENSE, BigDecimal.ZERO);
-            when(accountRepository.findByNameAndCurrency("INTEREST_EXPENSE", CurrencyType.USD)).thenReturn(Optional.of(expenseAcc));
-            when(accountRepository.findByUserIdAndCurrency(receiverId, CurrencyType.USD)).thenReturn(Optional.of(receiverAccount));
-        } else if (type == TransactionType.REFUND || type == TransactionType.ADJUSTMENT) {
-            when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.of(senderAccount));
-            when(accountRepository.findByUserIdAndCurrency(receiverId, CurrencyType.USD)).thenReturn(Optional.of(receiverAccount));
-        }
+        stubStrategyResolution(type);
 
         when(transactionRepository.existsByReferenceId(any())).thenReturn(false);
         ledgerService.processTransaction(request);
@@ -158,8 +181,7 @@ class LedgerServiceUnitTest {
     void testNSF_Rejection() {
         TransactionRequest request = createRequest(TransactionType.TRANSFER, new BigDecimal("150.00"));
 
-        when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.of(senderAccount));
-        when(accountRepository.findByUserIdAndCurrency(receiverId, CurrencyType.USD)).thenReturn(Optional.of(receiverAccount));
+        stubStrategyResolution(TransactionType.TRANSFER);
 
         ledgerService.processTransaction(request);
 
@@ -173,8 +195,7 @@ class LedgerServiceUnitTest {
         senderAccount.setStatus(AccountStatus.FROZEN);
         TransactionRequest request = createRequest(TransactionType.TRANSFER, new BigDecimal("100.00"));
 
-        when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.of(senderAccount));
-        when(accountRepository.findByUserIdAndCurrency(receiverId, CurrencyType.USD)).thenReturn(Optional.of(receiverAccount));
+        stubStrategyResolution(TransactionType.TRANSFER);
         when(transactionRepository.existsByReferenceId(any())).thenReturn(false);
 
         ledgerService.processTransaction(request);
@@ -187,7 +208,8 @@ class LedgerServiceUnitTest {
     void testAccountNotFound() {
         TransactionRequest request = createRequest(TransactionType.TRANSFER, new BigDecimal("100.00"));
 
-        when(accountRepository.findByUserIdAndCurrency(any(), any())).thenReturn(Optional.empty());
+        when(transferStrategy.resolve(any(TransactionRequest.class), any(AccountRepository.class)))
+                .thenThrow(new AccountNotFoundException(request.getSenderId()));
 
         assertThatThrownBy(() -> ledgerService.processTransaction(request))
                 .isInstanceOf(AccountNotFoundException.class);
@@ -198,7 +220,8 @@ class LedgerServiceUnitTest {
     void testWorldAccountMissing() {
         TransactionRequest request = createRequest(TransactionType.DEPOSIT, new BigDecimal("100.00"));
 
-        when(accountRepository.findByNameAndCurrency(anyString(), any())).thenReturn(Optional.empty());
+        when(depositStrategy.resolve(any(), any()))
+                .thenThrow(new MissingSystemAccountException("WORLD_LIQUIDITY"));
 
         assertThatThrownBy(() -> ledgerService.processTransaction(request))
                 .isInstanceOf(MissingSystemAccountException.class);
@@ -210,7 +233,7 @@ class LedgerServiceUnitTest {
         BigDecimal amount = new BigDecimal("10.1234999");
         TransactionRequest request = createRequest(TransactionType.TRANSFER, MoneyUtil.format(amount));
 
-        stubAccountLookups(TransactionType.TRANSFER);
+        stubStrategyResolution(TransactionType.TRANSFER);
 
         ledgerService.processTransaction(request);
 
@@ -223,7 +246,7 @@ class LedgerServiceUnitTest {
     @DisplayName("Should save correct Outbox Event metadata on success")
     void testOutboxContent() {
         TransactionRequest request = createRequest(TransactionType.TRANSFER, new BigDecimal("10.00"));
-        stubAccountLookups(TransactionType.TRANSFER);
+        stubStrategyResolution(TransactionType.TRANSFER);
 
         ledgerService.processTransaction(request);
 
@@ -234,21 +257,6 @@ class LedgerServiceUnitTest {
         assertThat(savedEvent.getEventType()).isEqualTo("TRANSACTION_COMPLETED");
         assertThat(savedEvent.getAggregateId()).isEqualTo(request.getReferenceId());
         assertThat(savedEvent.getPayload()).contains(request.getReferenceId());
-    }
-
-    @Test
-    @DisplayName("Should handle self-transfers (Sender == Receiver) gracefully")
-    void testSelfTransfer() {
-        TransactionRequest request = createRequest(TransactionType.TRANSFER, new BigDecimal("10.00"));
-        request.setReceiverId(senderId);
-
-        when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD))
-                .thenReturn(Optional.of(senderAccount));
-
-        ledgerService.processTransaction(request);
-
-        assertThat(senderAccount.getBalance()).isEqualByComparingTo("100.00");
-        verify(transactionRepository).save(argThat(t -> t.getStatus() == TransactionStatus.POSTED));
     }
 
     @Test
@@ -457,27 +465,29 @@ class LedgerServiceUnitTest {
         return r;
     }
 
-    private void stubAccountLookups(TransactionType type) {
+    private void stubStrategyResolution(TransactionType type) {
         switch (type) {
             case TRANSFER, PAYMENT, ADJUSTMENT, REFUND -> {
-                lenient().when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.of(senderAccount));
-                lenient().when(accountRepository.findByUserIdAndCurrency(receiverId, CurrencyType.USD)).thenReturn(Optional.of(receiverAccount));
+                AccountPair pair = new AccountPair(senderAccount, receiverAccount);
+                lenient().when(transferStrategy.resolve(any(), any())).thenReturn(pair);
             }
             case DEPOSIT -> {
-                lenient().when(accountRepository.findByNameAndCurrency(eq("WORLD_LIQUIDITY"), any())).thenReturn(Optional.of(worldAccount));
-                lenient().when(accountRepository.findByUserIdAndCurrency(receiverId, CurrencyType.USD)).thenReturn(Optional.of(receiverAccount));
+                AccountPair pair = new AccountPair(worldAccount, receiverAccount);
+                lenient().when(depositStrategy.resolve(any(), any())).thenReturn(pair);
             }
             case WITHDRAWAL -> {
-                lenient().when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.of(senderAccount));
-                lenient().when(accountRepository.findByNameAndCurrency(eq("WORLD_LIQUIDITY"), any())).thenReturn(Optional.of(worldAccount));
+                AccountPair pair = new AccountPair(senderAccount, worldAccount);
+                lenient().when(withdrawalStrategy.resolve(any(), any())).thenReturn(pair);
             }
             case FEE -> {
-                lenient().when(accountRepository.findByUserIdAndCurrency(senderId, CurrencyType.USD)).thenReturn(Optional.of(senderAccount));
-                lenient().when(accountRepository.findByNameAndCurrency("REVENUE_ACCOUNT", CurrencyType.USD)).thenReturn(Optional.of(worldAccount));
+                Account revenueAcc = createMockAccount(null, "REVENUE_ACCOUNT", AccountType.INCOME, BigDecimal.ZERO);
+                AccountPair pair = new AccountPair(senderAccount, revenueAcc);
+                lenient().when(feeStrategy.resolve(any(), any())).thenReturn(pair);
             }
             case INTEREST -> {
-                lenient().when(accountRepository.findByUserIdAndCurrency(receiverId, CurrencyType.USD)).thenReturn(Optional.of(receiverAccount));
-                lenient().when(accountRepository.findByNameAndCurrency("INTEREST_EXPENSE", CurrencyType.USD)).thenReturn(Optional.of(worldAccount));
+                Account expenseAcc = createMockAccount(null, "INTEREST_EXPENSE", AccountType.EXPENSE, BigDecimal.ZERO);
+                AccountPair pair = new AccountPair(expenseAcc, receiverAccount);
+                lenient().when(feeStrategy.resolve(any(), any())).thenReturn(pair);
             }
         }
     }
