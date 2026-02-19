@@ -12,6 +12,9 @@ import com.openfashion.ledgerservice.repository.OutboxRepository;
 import com.openfashion.ledgerservice.repository.PostingRepository;
 import com.openfashion.ledgerservice.repository.TransactionRepository;
 import com.openfashion.ledgerservice.service.LedgerService;
+import com.openfashion.ledgerservice.service.strategy.AccountPair;
+import com.openfashion.ledgerservice.service.strategy.AccountResolutionStrategy;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.serializer.support.SerializationFailedException;
@@ -25,9 +28,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 
 @Service
 @Slf4j
@@ -43,7 +44,23 @@ public class LedgerServiceImp implements LedgerService {
     private static final String WITHDRAWAL_ACCOUNT_NAME = "PENDING_WITHDRAWAL";
     private static final String WORLD_ACCOUNT_NAME = "WORLD_LIQUIDITY";
 
-    @Transactional
+    private final Map<TransactionType, AccountResolutionStrategy> strategyMap = new EnumMap<>(TransactionType.class);
+    private final List<AccountResolutionStrategy> strategies;
+
+    @PostConstruct
+    public void initStrategy() {
+        for (TransactionType type : TransactionType.values()) {
+            strategies.stream()
+                    .filter(s -> s.supports(type))
+                    .findFirst()
+                    .ifPresentOrElse(
+                            s -> strategyMap.put(type, s),
+                            () -> log.warn("No strategy found for TransactionType: {}", type)
+                    );
+        }
+    }
+
+    @Transactional(isolation = Isolation.SERIALIZABLE)
     @Retryable(
             retryFor = OptimisticLockingFailureException.class,
             maxAttempts = 4,
@@ -60,33 +77,15 @@ public class LedgerServiceImp implements LedgerService {
             return;
         }
 
-        Account debitAccount;
-        Account creditAccount;
-
-        //Could implement a strategy pattern for this logic?
-        switch (request.getType()) {
-            case DEPOSIT -> {
-                debitAccount = getSystemAccount(WORLD_ACCOUNT_NAME, request.getCurrency());
-                creditAccount = getAccount(request.getReceiverId(), request.getCurrency());
-            }
-            case WITHDRAWAL -> {
-                debitAccount = getAccount(request.getSenderId(), request.getCurrency());
-                creditAccount = getSystemAccount(WORLD_ACCOUNT_NAME, request.getCurrency());
-            }
-            case TRANSFER, PAYMENT, ADJUSTMENT, REFUND -> {
-                debitAccount = getAccount(request.getSenderId(), request.getCurrency());
-                creditAccount = getAccount(request.getReceiverId(), request.getCurrency());
-            }
-            case FEE -> {
-                debitAccount = getAccount(request.getSenderId(), request.getCurrency());
-                creditAccount = getSystemAccount("REVENUE_ACCOUNT", request.getCurrency());
-            }
-            case INTEREST -> {
-                debitAccount = getSystemAccount("INTEREST_EXPENSE", request.getCurrency());
-                creditAccount = getAccount(request.getReceiverId(), request.getCurrency());
-            }
-            default -> throw new UnsupportedTransactionException(String.valueOf(request.getType()));
+        AccountResolutionStrategy strategy = strategyMap.get(request.getType());
+        if (strategy == null) {
+            throw new UnsupportedTransactionException(String.valueOf(request.getType()));
         }
+
+        AccountPair accounts = strategy.resolve(request, accountRepository);
+
+        Account debitAccount = accounts.debit();
+        Account creditAccount = accounts.credit();
 
         Transaction transaction = Transaction.builder()
                 .referenceId(request.getReferenceId())
@@ -299,18 +298,6 @@ public class LedgerServiceImp implements LedgerService {
 
     private Posting createPosting(Transaction transaction, Account account, BigDecimal amount, PostingDirection postingDirection) {
         return Posting.builder().transaction(transaction).account(account).amount(amount).direction(postingDirection).build();
-    }
-
-    private Account getAccount(UUID userId, CurrencyType currency) {
-
-        return accountRepository.findByUserIdAndCurrency(userId, currency)
-                .orElseThrow(() -> new AccountNotFoundException(userId));
-
-    }
-
-    private Account getSystemAccount(String name, CurrencyType currency) {
-        return accountRepository.findByNameAndCurrency(name, currency)
-                .orElseThrow(() -> new MissingSystemAccountException(name));
     }
 
     private void validateTransactionRequest(TransactionRequest request) {
