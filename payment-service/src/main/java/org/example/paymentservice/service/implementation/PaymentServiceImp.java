@@ -4,6 +4,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.paymentservice.core.exception.DuplicatedRequestException;
+import org.example.paymentservice.core.exception.InvalidTransferException;
 import org.example.paymentservice.core.exception.PaymentNotFoundException;
 import org.example.paymentservice.dto.PaymentRequest;
 import org.example.paymentservice.model.*;
@@ -76,6 +77,11 @@ public class PaymentServiceImp implements PaymentService {
             throw new UnsupportedOperationException("No strategy found for type: " + request.type());
         }
 
+        if (request.type() == TransactionType.TRANSFER && senderId.equals(request.receiverId())) {
+            log.warn("Blocked self-transfer attempt for user: {}", senderId);
+            throw new InvalidTransferException("You cannot transfer money to your own account.");
+        }
+
         UUID receiverId;
 
         if (request.type() == TransactionType.DEPOSIT || request.type() == TransactionType.WITHDRAWAL) {
@@ -95,6 +101,8 @@ public class PaymentServiceImp implements PaymentService {
             redisTemplate.delete(request.idempotencyKey());
             throw new DuplicatedRequestException("Payment already processed with key: " + request.idempotencyKey());
         }
+
+
 
         try {
 
