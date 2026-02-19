@@ -24,8 +24,8 @@ public class DepositResolutionStrategy implements AccountResolutionStrategy {
         Account debit = repository.findByNameAndCurrency(WORLD_ACCOUNT, request.getCurrency())
                 .orElseThrow(() -> new MissingSystemAccountException(WORLD_ACCOUNT));
 
-        Account credit = repository.findByUserIdAndCurrency(request.getSenderId(), request.getCurrency())
-                .orElseThrow(() -> new AccountNotFoundException(request.getSenderId()));
+        Account credit = repository.findByUserIdAndCurrency(request.getReceiverId(), request.getCurrency())
+                .orElseThrow(() -> new AccountNotFoundException(request.getReceiverId()));
 
         return new AccountPair(debit, credit);
     }

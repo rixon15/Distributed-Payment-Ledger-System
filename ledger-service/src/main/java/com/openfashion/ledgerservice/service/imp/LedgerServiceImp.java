@@ -28,7 +28,10 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
 
 @Service
 @Slf4j
@@ -60,7 +63,7 @@ public class LedgerServiceImp implements LedgerService {
         }
     }
 
-    @Transactional(isolation = Isolation.SERIALIZABLE)
+    @Transactional
     @Retryable(
             retryFor = OptimisticLockingFailureException.class,
             maxAttempts = 4,
