@@ -66,6 +66,7 @@ class LedgerServiceUnitTest {
     @Mock private AccountResolutionStrategy depositStrategy;
     @Mock private AccountResolutionStrategy feeStrategy;
     @Mock private AccountResolutionStrategy withdrawalStrategy;
+    @Mock private AccountResolutionStrategy interestStrategy;
 
     @BeforeEach
     void setUp() {
@@ -110,7 +111,7 @@ class LedgerServiceUnitTest {
 
         // 3. Put them all in the list
         List<AccountResolutionStrategy> strategies = List.of(
-                transferStrategy, depositStrategy, withdrawalStrategy, feeStrategy
+                transferStrategy, depositStrategy, withdrawalStrategy, feeStrategy, interestStrategy
         );
 
         ledgerService = new LedgerServiceImp(
@@ -125,7 +126,7 @@ class LedgerServiceUnitTest {
         ledgerService.initStrategy();
 
         // 4. Clear invocations
-        Mockito.clearInvocations(transferStrategy, depositStrategy, withdrawalStrategy, feeStrategy);
+        Mockito.clearInvocations(transferStrategy, depositStrategy, withdrawalStrategy, feeStrategy, interestStrategy);
         }
 
     @ParameterizedTest
@@ -487,7 +488,7 @@ class LedgerServiceUnitTest {
             case INTEREST -> {
                 Account expenseAcc = createMockAccount(null, "INTEREST_EXPENSE", AccountType.EXPENSE, BigDecimal.ZERO);
                 AccountPair pair = new AccountPair(expenseAcc, receiverAccount);
-                lenient().when(feeStrategy.resolve(any(), any())).thenReturn(pair);
+                lenient().when(interestStrategy.resolve(any(), any())).thenReturn(pair);
             }
         }
     }
