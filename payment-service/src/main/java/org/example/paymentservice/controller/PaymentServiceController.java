@@ -2,6 +2,7 @@ package org.example.paymentservice.controller;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.example.paymentservice.core.annotation.Idempotent;
 import org.example.paymentservice.dto.PaymentRequest;
 import org.example.paymentservice.service.PaymentService;
 import org.springframework.http.HttpStatus;
@@ -18,6 +19,7 @@ public class PaymentServiceController {
     private final PaymentService paymentService;
 
     @PostMapping("/execute")
+    @Idempotent
     public ResponseEntity<Void> executePayment(
             @RequestHeader("X-User-ID") UUID senderID,
             @RequestBody @Valid PaymentRequest request
