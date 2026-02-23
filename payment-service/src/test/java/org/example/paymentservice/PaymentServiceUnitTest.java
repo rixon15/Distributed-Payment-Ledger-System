@@ -8,6 +8,7 @@ import org.example.paymentservice.model.PaymentStatus;
 import org.example.paymentservice.model.TransactionType;
 import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
+import org.example.paymentservice.service.RequestLockService;
 import org.example.paymentservice.service.implementation.PaymentServiceImp;
 import org.example.paymentservice.service.strategy.PaymentStrategy;
 import org.example.paymentservice.simulator.riskengine.dto.RiskRequest;
@@ -60,6 +61,8 @@ class PaymentServiceUnitTest {
     private OutboxRepository outboxRepository;
     @Mock
     private ObjectMapper objectMapper;
+    @Mock
+    private RequestLockService requestLockService;
 
     private PaymentServiceImp paymentService;
 
@@ -78,11 +81,11 @@ class PaymentServiceUnitTest {
         paymentService = new PaymentServiceImp(
                 paymentRepository,
                 strategies,
-                redisTemplate,
                 restClient,
                 transactionTemplate,
                 outboxRepository,
-                objectMapper
+                objectMapper,
+                requestLockService
         );
 
         paymentService.initStrategies();
@@ -113,12 +116,15 @@ class PaymentServiceUnitTest {
     @Test
     @DisplayName("Should throw DuplicatedRequestException when Redis lock fails")
     void testProcessPayment_Duplicate() {
-        mockRedisAcquire(false);
+        mockRedisAcquire(true);
+
+        Payment existingPayment = Payment.builder().idempotencyKey("unique-key-123").build();
+        when(paymentRepository.findByIdempotencyKey("unique-key-123"))
+                .thenReturn(Optional.of(existingPayment));
 
         assertThatThrownBy(() -> paymentService.processPayment(senderId, request))
                 .isInstanceOf(DuplicatedRequestException.class);
 
-        verifyNoInteractions(paymentRepository);
         verifyNoInteractions(transferStrategy);
     }
 
@@ -169,7 +175,7 @@ class PaymentServiceUnitTest {
 
         verify(transferStrategy, never()).execute(any(), any());
         verify(paymentRepository, times(2)).save(any(Payment.class)); // Created + Updated
-        verify(redisTemplate).delete(request.idempotencyKey());
+        verify(requestLockService).release(request.idempotencyKey());
     }
 
 

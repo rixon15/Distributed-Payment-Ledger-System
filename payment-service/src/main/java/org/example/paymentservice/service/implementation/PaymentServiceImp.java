@@ -11,15 +11,12 @@ import org.example.paymentservice.model.*;
 import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
 import org.example.paymentservice.service.PaymentService;
+import org.example.paymentservice.service.RequestLockService;
 import org.example.paymentservice.service.strategy.PaymentStrategy;
 import org.example.paymentservice.simulator.riskengine.dto.RiskRequest;
 import org.example.paymentservice.simulator.riskengine.dto.RiskResponse;
 import org.example.paymentservice.simulator.riskengine.dto.RiskStatus;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.connection.RedisStringCommands;
-import org.springframework.data.redis.core.RedisCallback;
-import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.core.types.Expiration;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,7 +24,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -38,11 +34,11 @@ public class PaymentServiceImp implements PaymentService {
 
     private final PaymentRepository paymentRepository;
     private final List<PaymentStrategy> strategyList;
-    private final RedisTemplate<String, String> redisTemplate;
     private final RestClient restClient;
     private final TransactionTemplate tx;
     private final OutboxRepository outboxRepository;
     private final ObjectMapper objectMapper;
+    private final RequestLockService requestLockService;
 
 
     private final Map<TransactionType, PaymentStrategy> strategyMap = new EnumMap<>(TransactionType.class);
@@ -92,13 +88,10 @@ public class PaymentServiceImp implements PaymentService {
 
         log.info("Processing payment request for user: {} with idempotencyKey: {}", senderId, request.idempotencyKey());
 
-        checkDuplicatedRequest(request.idempotencyKey());
-
         Optional<Payment> existingPayment = paymentRepository.findByIdempotencyKey(request.idempotencyKey());
 
         if (existingPayment.isPresent()) {
             log.warn("Payment already exists in the DB for key: {}", request.idempotencyKey());
-            redisTemplate.delete(request.idempotencyKey());
             throw new DuplicatedRequestException("Payment already processed with key: " + request.idempotencyKey());
         }
 
@@ -133,7 +126,6 @@ public class PaymentServiceImp implements PaymentService {
             strategy.execute(payment, request);
         } catch (Exception e) {
             log.error("Payment processing failed for key: {}. Releasing Redis lock", request.idempotencyKey());
-            redisTemplate.delete(request.idempotencyKey());
             throw e;
         }
     }
@@ -169,21 +161,6 @@ public class PaymentServiceImp implements PaymentService {
         strategy.execute(payment, request);
     }
 
-    private boolean acquire(String key) {
-        byte[] keyBytes = key.getBytes(StandardCharsets.UTF_8);
-        byte[] valueBytes = "1".getBytes(StandardCharsets.UTF_8);
-
-        Boolean success = redisTemplate.execute((RedisCallback<Boolean>) connection ->
-                connection.stringCommands().set(
-                        keyBytes,
-                        valueBytes,
-                        Expiration.seconds(300),
-                        RedisStringCommands.SetOption.SET_IF_ABSENT
-                ));
-
-        return Boolean.TRUE.equals(success);
-    }
-
     private RiskResponse checkRisk(UUID senderId, PaymentRequest request) {
         try {
             RiskResponse response = restClient.post()
@@ -206,14 +183,7 @@ public class PaymentServiceImp implements PaymentService {
             paymentRepository.save(payment);
         });
 
-        redisTemplate.delete(payment.getIdempotencyKey());
-    }
-
-    private void checkDuplicatedRequest(String idempotencyKey) {
-        if (!acquire(idempotencyKey)) {
-            log.warn("Duplicate payment request blocked. Key: {}", idempotencyKey);
-            throw new DuplicatedRequestException(idempotencyKey);
-        }
+        requestLockService.release(payment.getIdempotencyKey());
     }
 
     private void handleManualReview(Payment payment, String reason) {
