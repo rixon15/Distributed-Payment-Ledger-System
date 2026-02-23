@@ -6,12 +6,14 @@ import com.openfashion.ledgerservice.dto.ReleaseRequest;
 import com.openfashion.ledgerservice.dto.ReservationRequest;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.event.WithdrawalConfirmedEvent;
+import com.openfashion.ledgerservice.dto.redis.PendingTransaction;
 import com.openfashion.ledgerservice.model.*;
 import com.openfashion.ledgerservice.repository.AccountRepository;
 import com.openfashion.ledgerservice.repository.OutboxRepository;
 import com.openfashion.ledgerservice.repository.PostingRepository;
 import com.openfashion.ledgerservice.repository.TransactionRepository;
 import com.openfashion.ledgerservice.service.LedgerService;
+import com.openfashion.ledgerservice.service.RedisBufferService;
 import com.openfashion.ledgerservice.service.strategy.AccountPair;
 import com.openfashion.ledgerservice.service.strategy.AccountResolutionStrategy;
 import jakarta.annotation.PostConstruct;
@@ -28,10 +30,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.EnumMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 @Service
 @Slf4j
@@ -43,6 +42,7 @@ public class LedgerServiceImp implements LedgerService {
     private final PostingRepository postingRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final OutboxRepository outboxRepository;
+    private final RedisBufferService redisBufferService;
     private static final String FAILED_TRANSACTION = "TRANSACTION_FAILED";
     private static final String WITHDRAWAL_ACCOUNT_NAME = "PENDING_WITHDRAWAL";
     private static final String WORLD_ACCOUNT_NAME = "WORLD_LIQUIDITY";
@@ -63,11 +63,6 @@ public class LedgerServiceImp implements LedgerService {
         }
     }
 
-    @Transactional
-    @Retryable(
-            retryFor = OptimisticLockingFailureException.class,
-            maxAttempts = 4,
-            backoff = @Backoff(delay = 50, multiplier = 2))
     public void processTransaction(TransactionRequest request) {
 
         validateTransactionRequest(request);
@@ -98,6 +93,15 @@ public class LedgerServiceImp implements LedgerService {
                 .metadata(request.getMetadata())
                 .build();
 
+        PendingTransaction pendingTransaction = new PendingTransaction(
+                UUID.fromString(request.getReferenceId()),
+                debitAccount.getId(),
+                creditAccount.getId(),
+                request.getAmount(),
+                request.getType(),
+                request.getSenderId().timestamp()
+        );
+
         if (debitAccount.getStatus() != AccountStatus.ACTIVE || creditAccount.getStatus() != AccountStatus.ACTIVE) {
             log.warn("Transaction {} rejected: Account inactive", request.getReferenceId());
 
@@ -120,24 +124,7 @@ public class LedgerServiceImp implements LedgerService {
             return;
         }
 
-        List<Posting> postings = new ArrayList<>();
-
-        postings.add(createPosting(transaction, debitAccount, request.getAmount(), PostingDirection.DEBIT));
-        updateBalance(debitAccount, request.getAmount().negate());
-
-        postings.add(createPosting(transaction, creditAccount, request.getAmount(), PostingDirection.CREDIT));
-        updateBalance(creditAccount, request.getAmount());
-
-        transaction.setStatus(TransactionStatus.POSTED);
-
-        accountRepository.save(debitAccount);
-        accountRepository.save(creditAccount);
-        transactionRepository.save(transaction);
-        postingRepository.saveAll(postings);
-
-        saveOutboxEvent(transaction, "TRANSACTION_COMPLETED");
-
-        log.info("Transaction {} processed successfully in {} ms", request.getReferenceId(), System.currentTimeMillis() - start);
+        redisBufferService.bufferTransactions(pendingTransaction);
 
     }
 
