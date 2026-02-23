@@ -4,5 +4,5 @@ public interface RequestLockService {
 
     boolean acquire(String key);
 
-    void releaseLock(String key);
+    void release(String key);
 }

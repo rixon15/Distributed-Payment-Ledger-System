@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.example.paymentservice.model.OutboxEvent;
 import org.example.paymentservice.model.OutboxStatus;
 import org.example.paymentservice.repository.OutboxRepository;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -18,6 +19,7 @@ import java.util.concurrent.TimeoutException;
 @Component
 @Slf4j
 @RequiredArgsConstructor
+@ConditionalOnProperty(value = "scheduling.enabled", havingValue = "true", matchIfMissing = true)
 public class OutboxPoller {
 
     private final OutboxRepository outboxRepository;

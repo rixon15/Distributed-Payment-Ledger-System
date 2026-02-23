@@ -19,8 +19,8 @@ public class DuplicateRequestCheck {
 
     private final RequestLockService requestLockService;
 
-    @Around("@annotation(idempotentConfig)")
-    public Object checkDuplicateRequest(ProceedingJoinPoint joinPoint, Idempotent idempotentConfig) throws Throwable {
+    @Around("@annotation(idempotent)")
+    public Object checkDuplicateRequest(ProceedingJoinPoint joinPoint, Idempotent idempotent) throws Throwable {
         PaymentRequest request = findPaymentRequest(joinPoint.getArgs());
 
         if (request == null) {
@@ -38,8 +38,9 @@ public class DuplicateRequestCheck {
             return joinPoint.proceed();
         } catch (Throwable ex) {
             log.error("Execution failed for key {}. Releasing lock.", key);
-            requestLockService.releaseLock(key);
             throw ex;
+        } finally {
+            requestLockService.release(key);
         }
     }
 

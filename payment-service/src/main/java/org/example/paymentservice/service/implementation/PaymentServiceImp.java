@@ -92,7 +92,6 @@ public class PaymentServiceImp implements PaymentService {
 
         if (existingPayment.isPresent()) {
             log.warn("Payment already exists in the DB for key: {}", request.idempotencyKey());
-            requestLockService.releaseLock(request.idempotencyKey());
             throw new DuplicatedRequestException("Payment already processed with key: " + request.idempotencyKey());
         }
 
@@ -127,7 +126,6 @@ public class PaymentServiceImp implements PaymentService {
             strategy.execute(payment, request);
         } catch (Exception e) {
             log.error("Payment processing failed for key: {}. Releasing Redis lock", request.idempotencyKey());
-            requestLockService.releaseLock(request.idempotencyKey());
             throw e;
         }
     }
@@ -185,7 +183,7 @@ public class PaymentServiceImp implements PaymentService {
             paymentRepository.save(payment);
         });
 
-        requestLockService.releaseLock(payment.getIdempotencyKey());
+        requestLockService.release(payment.getIdempotencyKey());
     }
 
     private void handleManualReview(Payment payment, String reason) {
