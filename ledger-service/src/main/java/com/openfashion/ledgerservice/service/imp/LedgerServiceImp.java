@@ -13,7 +13,7 @@ import com.openfashion.ledgerservice.repository.OutboxRepository;
 import com.openfashion.ledgerservice.repository.PostingRepository;
 import com.openfashion.ledgerservice.repository.TransactionRepository;
 import com.openfashion.ledgerservice.service.LedgerService;
-import com.openfashion.ledgerservice.service.RedisBufferService;
+import com.openfashion.ledgerservice.service.RedisService;
 import com.openfashion.ledgerservice.service.strategy.AccountPair;
 import com.openfashion.ledgerservice.service.strategy.AccountResolutionStrategy;
 import jakarta.annotation.PostConstruct;
@@ -30,7 +30,10 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.*;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 @Service
 @Slf4j
@@ -42,7 +45,7 @@ public class LedgerServiceImp implements LedgerService {
     private final PostingRepository postingRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final OutboxRepository outboxRepository;
-    private final RedisBufferService redisBufferService;
+    private final RedisService redisService;
     private static final String FAILED_TRANSACTION = "TRANSACTION_FAILED";
     private static final String WITHDRAWAL_ACCOUNT_NAME = "PENDING_WITHDRAWAL";
     private static final String WORLD_ACCOUNT_NAME = "WORLD_LIQUIDITY";
@@ -67,9 +70,6 @@ public class LedgerServiceImp implements LedgerService {
 
         validateTransactionRequest(request);
 
-        long start = System.currentTimeMillis();
-        log.info("Processing transaction with referenceId: {}", request.getReferenceId());
-
         if (transactionRepository.existsByReferenceId(request.getReferenceId())) {
             log.warn("Idempotency Triggered: Transaction {} already processed.", request.getReferenceId());
             return;
@@ -82,49 +82,27 @@ public class LedgerServiceImp implements LedgerService {
 
         AccountPair accounts = strategy.resolve(request, accountRepository);
 
-        Account debitAccount = accounts.debit();
-        Account creditAccount = accounts.credit();
+        BigDecimal pendingNet = redisService.getPendingNetChanges(accounts.debit().getId());
+        BigDecimal softBalance = accounts.debit().getBalance().add(pendingNet);
 
-        Transaction transaction = Transaction.builder()
-                .referenceId(request.getReferenceId())
-                .type(request.getType())
-                .status(TransactionStatus.PENDING)
-                .effectiveDate(Instant.now())
-                .metadata(request.getMetadata())
-                .build();
+        if (accounts.debit().getType() == AccountType.ASSET && softBalance.compareTo(request.getAmount()) < 0) {
+            saveRejectedTransaction(request, TransactionStatus.REJECTED_NSF);
+            return;
+        }
 
         PendingTransaction pendingTransaction = new PendingTransaction(
                 UUID.fromString(request.getReferenceId()),
-                debitAccount.getId(),
-                creditAccount.getId(),
+                accounts.debit().getId(),
+                accounts.credit().getId(),
                 request.getAmount(),
                 request.getType(),
-                request.getSenderId().timestamp()
+                System.currentTimeMillis()
+
         );
 
-        if (debitAccount.getStatus() != AccountStatus.ACTIVE || creditAccount.getStatus() != AccountStatus.ACTIVE) {
-            log.warn("Transaction {} rejected: Account inactive", request.getReferenceId());
+        redisService.bufferTransactions(pendingTransaction);
 
-            transaction.setStatus(TransactionStatus.REJECTED_INACTIVE);
-            transactionRepository.save(transaction);
-
-            saveOutboxEvent(transaction, FAILED_TRANSACTION);
-            return;
-        }
-
-        // We ONLY enforce NSF checks on User ASSET accounts.
-        // - System Accounts (EQUITY, INCOME, EXPENSE) are unbounded by design (e.g. World Liquidity must go negative to mint money).
-        // - LIABILITY accounts (Credit Cards) would require a different check (Credit Limit), not a Zero-Floor check.
-        if (debitAccount.getType() == AccountType.ASSET && debitAccount.getBalance().compareTo(request.getAmount()) < 0) {
-            transaction.setStatus(TransactionStatus.REJECTED_NSF);
-            transactionRepository.save(transaction);
-            log.info("Transaction rejected (NSF): {}", request.getReferenceId());
-
-            saveOutboxEvent(transaction, FAILED_TRANSACTION);
-            return;
-        }
-
-        redisBufferService.bufferTransactions(pendingTransaction);
+        log.info("Transaction {} accepted and buffered", request.getReferenceId());
 
     }
 
@@ -282,10 +260,6 @@ public class LedgerServiceImp implements LedgerService {
         log.info("Withdrawal was successful. Transaction ID: {}", pendingTransaction.getId());
     }
 
-    private void updateBalance(Account account, BigDecimal amount) {
-        account.setBalance(account.getBalance().add(MoneyUtil.format(amount)));
-    }
-
     private Posting createPosting(Transaction transaction, Account account, BigDecimal amount, PostingDirection postingDirection) {
         return Posting.builder().transaction(transaction).account(account).amount(amount).direction(postingDirection).build();
     }
@@ -364,6 +338,22 @@ public class LedgerServiceImp implements LedgerService {
             throw new SerializationFailedException("Serialization failure", e);
         }
 
+    }
+
+    private void saveRejectedTransaction(TransactionRequest request, TransactionStatus status) {
+        log.warn("Transaction {} rejected: {}", request.getReferenceId(), status);
+
+        Transaction transaction = Transaction.builder()
+                .referenceId(request.getReferenceId())
+                .type(request.getType())
+                .status(status)
+                .effectiveDate(Instant.now())
+                .metadata(request.getMetadata())
+                .build();
+
+        transactionRepository.save(transaction);
+
+        saveOutboxEvent(transaction, FAILED_TRANSACTION);
     }
 
 }

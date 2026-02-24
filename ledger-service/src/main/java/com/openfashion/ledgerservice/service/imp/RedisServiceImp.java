@@ -2,10 +2,11 @@ package com.openfashion.ledgerservice.service.imp;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openfashion.ledgerservice.dto.redis.PendingTransaction;
-import com.openfashion.ledgerservice.service.RedisBufferService;
+import com.openfashion.ledgerservice.service.RedisService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -14,14 +15,34 @@ import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
-public class RedisBufferServiceImp implements RedisBufferService {
+public class RedisServiceImp implements RedisService {
 
     private final RedisTemplate<String, String> balanceTemplate;
-    private final RedisTemplate<String, PendingTransaction> logTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final String AGGREGATE_KEY = "ledger:pending:balance";
     private static final String QUEUE_KEY = "ledger:queue";
+
+    private static final String COMMIT_LUA_STRING = """
+            for i, json in ipairs(ARGV) do local tx = cjson.decode(json);
+            
+                -- Reverse the debit pending change
+                local new_debit = redis.call('HINCRBYFLOAT', KEYS[1], tx.debitAccountId, tx.amount);
+                if tonumber(new_debit) == 0 then
+                    redis.call('HDEL', KEYS[1], tx.debitAccountId);
+                end
+            
+                -- Reverse the credit pending change
+                local new_credit = redis.call('HINCRBYFLOAT', KEYS[1], tx.creditAccountId, '-' .. tx.amount);
+                if tonumber(new_credit) == 0 then
+                    redis.call('HDEL', KEYS[1], tx.creditAccountId);
+                end
+            end
+            return true;
+            """;
+
+    private static final RedisScript<Boolean> COMMIT_SCRIPT =
+            new DefaultRedisScript<>(COMMIT_LUA_STRING, Boolean.class);
 
     @Override
     public void bufferTransactions(PendingTransaction transaction) {
@@ -54,5 +75,19 @@ public class RedisBufferServiceImp implements RedisBufferService {
         } catch (Exception e) {
             throw new RuntimeException("Serialization failed", e);
         }
+    }
+
+    @Override
+    public void commitFromBuffer(List<PendingTransaction> transactions) {
+
+
+        Object[] args = transactions.stream().map(this::serialize).toArray();
+
+        balanceTemplate.execute(
+                COMMIT_SCRIPT,
+                List.of(AGGREGATE_KEY),
+                args
+        );
+
     }
 }
