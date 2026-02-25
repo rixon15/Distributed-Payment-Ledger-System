@@ -37,6 +37,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         log.info("Committing batch of {} transaction to Postgres", batch.size());
 
         Set<UUID> accountIds = new HashSet<>();
+        Set<String> refIds = new HashSet<>();
         Map<UUID, BigDecimal> balanceChanges = new HashMap<>();
         List<Transaction> transactionsToSave = new ArrayList<>();
         List<OutboxEvent> outboxEventsToSave = new ArrayList<>();
@@ -45,48 +46,45 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         for (PendingTransaction pendingTransaction : batch) {
             accountIds.add(pendingTransaction.debitAccountId());
             accountIds.add(pendingTransaction.creditAccountId());
+            refIds.add(pendingTransaction.referenceId().toString());
         }
 
         Map<UUID, Account> accountMap = accountRepository.findAllById(accountIds)
                 .stream().collect(Collectors.toMap(Account::getId, Function.identity()));
 
+        Map<String, Transaction> existingTransactionMap = transactionRepository.findAllByReferenceIdIn(refIds)
+                .stream().collect(Collectors.toMap(Transaction::getReferenceId, Function.identity()));
+
         for (PendingTransaction pendingTransaction : batch) {
-            Transaction transaction = Transaction.builder()
-                    .referenceId(pendingTransaction.referenceId().toString())
-                    .type(pendingTransaction.type())
-                    .status(TransactionStatus.POSTED)
-                    .effectiveDate(Instant.ofEpochMilli(pendingTransaction.timestamp()))
-                    .build();
-
-
+            Transaction transaction = existingTransactionMap.get(pendingTransaction.referenceId().toString());
             Account debitAccount = accountMap.get(pendingTransaction.debitAccountId());
             Account creditAccount = accountMap.get(pendingTransaction.creditAccountId());
 
             if (debitAccount == null || creditAccount == null) {
-                log.error("Critical: Account missing from transaction {}", pendingTransaction.referenceId());
-                handleDeadLetter(pendingTransaction, "Account misssing during batch processing");
+                handleDeadLetter(pendingTransaction, "Account missing");
                 continue;
             }
 
-            transactionsToSave.add(transaction);
+            switch (pendingTransaction.type()) {
+                case WITHDRAWAL_RESERVE ->
+                        handleReserve(pendingTransaction, debitAccount, creditAccount, transactionsToSave, postingsToSave, balanceChanges, outboxEventsToSave);
 
-            postingsToSave.add(new Posting(pendingTransaction.referenceId(), transaction, debitAccount, pendingTransaction.amount(), PostingDirection.DEBIT));
-            postingsToSave.add(new Posting(pendingTransaction.referenceId(), transaction, creditAccount, pendingTransaction.amount(), PostingDirection.CREDIT));
+                case WITHDRAWAL_SETTLE ->
+                        handleSettle(pendingTransaction, transaction, debitAccount, creditAccount, postingsToSave, balanceChanges, outboxEventsToSave);
 
-            balanceChanges.merge(pendingTransaction.debitAccountId(), pendingTransaction.amount().negate(), BigDecimal::add);
-            balanceChanges.merge(pendingTransaction.creditAccountId(), pendingTransaction.amount(), BigDecimal::add);
+                case WITHDRAWAL_RELEASE ->
+                        handleRelease(pendingTransaction, transaction, debitAccount, creditAccount, postingsToSave, balanceChanges, outboxEventsToSave);
 
-
-            outboxEventsToSave.add(createOutboxEvent(pendingTransaction, pendingTransaction.referenceId().toString(), "TRANSACTION_COMPLETED"));
+                default -> // Normal Transfers/Deposits/Fees
+                        handleStandard(pendingTransaction, debitAccount, creditAccount, transactionsToSave, postingsToSave, balanceChanges, outboxEventsToSave);
+            }
         }
 
         transactionRepository.saveAll(transactionsToSave);
         outboxRepository.saveAll(outboxEventsToSave);
         postingRepository.saveAll(postingsToSave);
 
-        for (Map.Entry<UUID, BigDecimal> entry : balanceChanges.entrySet()) {
-            accountRepository.updateBalance(entry.getKey(), entry.getValue());
-        }
+        balanceChanges.forEach(accountRepository::updateBalance);
 
         redisService.commitFromBuffer(batch);
     }
@@ -113,5 +111,57 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
                 .payload(objectMapper.writeValueAsString(payload))
                 .status(OutboxStatus.PENDING)
                 .build();
+    }
+
+    private void handleReserve(PendingTransaction pt, Account debit, Account credit, List<Transaction> txs,
+                               List<Posting> posts, Map<UUID, BigDecimal> balances, List<OutboxEvent> events) {
+        Transaction tx = createBaseTransaction(pt, TransactionStatus.PENDING);
+        txs.add(tx);
+        applyPostings(pt, tx, debit, credit, posts, balances);
+        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "WITHDRAWAL_RESERVED"));
+    }
+
+    private void handleSettle(PendingTransaction pt, Transaction tx, Account debit, Account credit,
+                              List<Posting> posts, Map<UUID, BigDecimal> balances, List<OutboxEvent> events) {
+        if (tx == null) return; //should handle as error or retry
+        tx.setStatus(TransactionStatus.POSTED);
+        applyPostings(pt, tx, debit, credit, posts, balances);
+        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "TRANSACTION_COMPLETED"));
+    }
+
+    private void handleRelease(PendingTransaction pt, Transaction tx, Account debit, Account credit,
+                               List<Posting> posts, Map<UUID, BigDecimal> balances, List<OutboxEvent> events) {
+        if (tx == null) return;
+        tx.setStatus(TransactionStatus.FAILED);
+        tx.setMetadata("Released by system");
+        applyPostings(pt, tx, debit, credit, posts, balances);
+        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "TRANSACTION_FAILED"));
+    }
+
+    private void handleStandard(PendingTransaction pt, Account debit, Account credit, List<Transaction> txs,
+                                List<Posting> posts, Map<UUID, BigDecimal> balances, List<OutboxEvent> events) {
+        // Standard transfers are POSTED immediately in the DB
+        Transaction tx = createBaseTransaction(pt, TransactionStatus.POSTED);
+        txs.add(tx);
+        applyPostings(pt, tx, debit, credit, posts, balances);
+        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "TRANSACTION_COMPLETED"));
+    }
+
+    private void applyPostings(PendingTransaction pt, Transaction tx, Account debit, Account credit, List<Posting> posts,
+                               Map<UUID, BigDecimal> balances) {
+        posts.add(new Posting(pt.referenceId(), tx, debit, pt.amount(), PostingDirection.DEBIT));
+        posts.add(new Posting(pt.referenceId(), tx, credit, pt.amount(), PostingDirection.CREDIT));
+        balances.merge(debit.getId(), pt.amount().negate(), BigDecimal::add);
+        balances.merge(credit.getId(), pt.amount(), BigDecimal::add);
+    }
+
+    private Transaction createBaseTransaction(PendingTransaction pt, TransactionStatus status) {
+        return Transaction.builder()
+                .referenceId(pt.referenceId().toString())
+                .type(pt.type())
+                .status(status)
+                .effectiveDate(Instant.ofEpochMilli(pt.timestamp()))
+                .build();
+
     }
 }

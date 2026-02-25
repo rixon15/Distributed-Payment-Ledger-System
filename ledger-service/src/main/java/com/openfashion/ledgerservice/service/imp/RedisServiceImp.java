@@ -64,8 +64,8 @@ public class RedisServiceImp implements RedisService {
 
     @Override
     public BigDecimal getPendingNetChanges(UUID accountId) {
-        Object value = balanceTemplate.opsForHash().get(AGGREGATE_KEY, accountId.toString());
 
+        Object value = balanceTemplate.opsForHash().get(AGGREGATE_KEY, accountId.toString());
         return value == null ? BigDecimal.ZERO : new BigDecimal(value.toString());
     }
 
