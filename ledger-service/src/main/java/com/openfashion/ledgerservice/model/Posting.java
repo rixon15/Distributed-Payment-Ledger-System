@@ -21,6 +21,13 @@ import java.util.UUID;
 @AllArgsConstructor
 public class Posting {
 
+    public Posting(Transaction transaction, Account account, BigDecimal amount, PostingDirection direction) {
+        this.transaction = transaction;
+        this.account = account;
+        this.amount = amount;
+        this.direction = direction;
+    }
+
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;

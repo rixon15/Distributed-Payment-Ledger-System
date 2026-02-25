@@ -46,11 +46,11 @@ public class MockBankController {
         } else if (roll < 15) {
             throw new BankErrorException();
         } else {
-            response = new BankPaymentResponse(
-                    UUID.randomUUID(),
-                    BankPaymentStatus.APPROVED,
-                    "SUCCESS"
-            );
+        response = new BankPaymentResponse(
+                UUID.randomUUID(),
+                BankPaymentStatus.APPROVED,
+                "SUCCESS"
+        );
         }
 
         idempotencyStore.put(request.referenceId(), response);

@@ -3,8 +3,7 @@ package org.example.paymentservice.service.strategy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.paymentservice.dto.PaymentRequest;
-import org.example.paymentservice.dto.event.TransactionInitiatedEvent;
-import org.example.paymentservice.dto.event.TransactionPayload;
+import org.example.paymentservice.dto.event.*;
 import org.example.paymentservice.model.*;
 import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
@@ -77,6 +76,10 @@ public abstract class PaymentStrategy {
             paymentRepository.save(payment);
 
             saveOutboxEvent(payment, "TRANSACTION_FAILED", userMessage);
+
+            if (payment.getType() == TransactionType.WITHDRAWAL) {
+                saveOutboxEvent(payment, "WITHDRAWAL_FAILED", internalReason);
+            }
         });
     }
 
@@ -86,10 +89,43 @@ public abstract class PaymentStrategy {
             payment.setExternalTransactionId(externalId != null ? externalId.toString() : null);
             paymentRepository.save(payment);
 
-            String eventType = (payment.getType() == TransactionType.WITHDRAWAL)
-                    ? "TRANSACTION_WITHDRAWAL_CONFIRMED" : "TRANSACTION_INITIATED";
+            // Map PaymentStatus to Ledger's WithdrawalStatus
+            if (payment.getType() == TransactionType.WITHDRAWAL) {
+                WithdrawalStatus ledgerStatus = switch (status) {
+                    case PENDING -> WithdrawalStatus.RESERVED;
+                    case AUTHORIZED -> WithdrawalStatus.CONFIRMED;
+                    case FAILED -> WithdrawalStatus.FAILED;
+                    default -> null;
+                };
 
-            saveOutboxEvent(payment, eventType, null);
+                if (ledgerStatus != null) {
+                    emitWithdrawalEvent(payment, ledgerStatus);
+                }
+            } else {
+                saveOutboxEvent(payment, "TRANSACTION_INITIATED", null);
+            }
         });
+    }
+
+    private void emitWithdrawalEvent(Payment payment, WithdrawalStatus status) {
+        WithdrawalEvent event = new WithdrawalEvent(
+                payment.getId(),
+                payment.getUserId(),
+                status,
+                new WithdrawalPayload(payment.getAmount(), payment.getCurrency()),
+                System.currentTimeMillis()
+        );
+
+        try {
+            outboxRepository.save(OutboxEvent.builder()
+                    .aggregateId(payment.getId().toString())
+                    .eventType("WITHDRAWAL_" + status.name())
+                    .payload(objectMapper.writeValueAsString(event))
+                    .status(OutboxStatus.PENDING)
+                    .createdAt(Instant.now())
+                    .build());
+        } catch (Exception e) {
+            throw new RuntimeException("Event serialization failed", e);
+        }
     }
 }

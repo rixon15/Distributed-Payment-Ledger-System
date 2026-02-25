@@ -24,11 +24,13 @@ public class OutboxPoller {
 
     private final OutboxRepository outboxRepository;
     private final KafkaTemplate<String, String> kafkaTemplate;
+    private static final int DELAY = 2000;
+    private static final int LIMIT = 100;
 
-    @Scheduled(fixedDelay = 2000)
+    @Scheduled(fixedDelay = DELAY)
     @Transactional
     public void processOutboxEvent() {
-        List<OutboxEvent> events = outboxRepository.findTop50ForProcessing();
+        List<OutboxEvent> events = outboxRepository.findTopForProcessing(LIMIT);
 
         if (events.isEmpty()) return;
 
@@ -58,9 +60,10 @@ public class OutboxPoller {
     private String determineTopic(String eventType) {
         return switch (eventType) {
             case "TRANSACTION_INITIATED" -> "transaction.initiated";
-            case "TRANSACTION_WITHDRAWAL_CONFIRMED" -> "transaction.withdrawal.confirmed";
-            case "TRANSACTION_FAILED" -> "transaction.failed";
-            case null, default -> "transaction.unknown";
+            case "WITHDRAWAL_RESERVED" -> "withdrawal.reserve";
+            case "WITHDRAWAL_CONFIRMED" -> "withdrawal.complete";
+            case "WITHDRAWAL_FAILED" -> "withdrawal.release";
+            default -> "transaction.unknown";
         };
     }
 

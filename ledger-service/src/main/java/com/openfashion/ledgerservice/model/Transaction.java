@@ -6,6 +6,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -23,7 +25,7 @@ public class Transaction {
     private UUID id;
 
     @Column(nullable = false, unique = true)
-    private String referenceId;
+    private UUID referenceId;
 
     @Column(nullable = false, length = 50)
     @Enumerated(EnumType.STRING)
@@ -33,7 +35,8 @@ public class Transaction {
     @Enumerated(EnumType.STRING)
     private TransactionStatus status;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
     private String metadata;
 
     @Column(nullable = false)

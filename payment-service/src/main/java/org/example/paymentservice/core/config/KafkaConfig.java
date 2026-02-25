@@ -1,10 +1,12 @@
 package org.example.paymentservice.core.config;
 
+import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
@@ -49,5 +51,29 @@ public class KafkaConfig {
     @Bean
     public KafkaTemplate<String, String> stringKafkaTemplate() {
         return new KafkaTemplate<>(stringProducerFactory());
+    }
+
+    @Bean
+    public NewTopic withdrawalReserveTopic() {
+        return TopicBuilder.name("withdrawal.reserve")
+                .partitions(3) // Order is guaranteed within each partition
+                .replicas(1)   // Set to 3 in production
+                .build();
+    }
+
+    @Bean
+    public NewTopic withdrawalCompleteTopic() {
+        return TopicBuilder.name("withdrawal.complete")
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
+
+    @Bean
+    public NewTopic withdrawalReleaseTopic() {
+        return TopicBuilder.name("withdrawal.release")
+                .partitions(3)
+                .replicas(1)
+                .build();
     }
 }
