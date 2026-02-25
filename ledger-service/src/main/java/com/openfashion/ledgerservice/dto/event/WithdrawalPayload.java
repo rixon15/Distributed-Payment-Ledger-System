@@ -1,10 +1,12 @@
 package com.openfashion.ledgerservice.dto.event;
 
+import com.openfashion.ledgerservice.model.CurrencyType;
+
 import java.math.BigDecimal;
 
 public record WithdrawalPayload(
         BigDecimal amount,
-        String currency // Using String here to be safe, then convert to Enum
+        CurrencyType currency
 ) {
     public WithdrawalPayload {
         if (amount != null) {
