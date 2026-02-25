@@ -1,11 +1,17 @@
 package com.openfashion.ledgerservice.service;
 
+import com.openfashion.ledgerservice.dto.ReleaseRequest;
+import com.openfashion.ledgerservice.dto.ReservationRequest;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
-import com.openfashion.ledgerservice.dto.event.WithdrawalEvent;
+import com.openfashion.ledgerservice.dto.event.WithdrawalConfirmedEvent;
 
 public interface LedgerService {
 
     void processTransaction(TransactionRequest request);
 
-    void handleWithdrawalEvent(WithdrawalEvent event);
+    void reserveFunds(ReservationRequest request);
+
+    void releaseFunds(ReleaseRequest request);
+
+    void processWithdrawal(WithdrawalConfirmedEvent event);
 }

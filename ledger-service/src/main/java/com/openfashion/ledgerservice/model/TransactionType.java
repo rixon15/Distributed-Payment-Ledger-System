@@ -16,10 +16,6 @@ public enum TransactionType {
      */
     WITHDRAWAL,
 
-    WITHDRAWAL_RESERVE,
-    WITHDRAWAL_SETTLE,
-    WITHDRAWAL_RELEASE,
-
     /**
      * INTERNAL TRANSFER (P2P)
      * Logic: Debit USER_A (Asset) -> Credit USER_B (Asset)

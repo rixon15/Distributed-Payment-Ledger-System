@@ -1,12 +1,13 @@
 package com.openfashion.ledgerservice.listener;
 
-import com.openfashion.ledgerservice.dto.event.WithdrawalEvent;
+import com.openfashion.ledgerservice.dto.event.WithdrawalConfirmedEvent;
 import com.openfashion.ledgerservice.service.LedgerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.kafka.annotation.BackOff;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.annotation.RetryableTopic;
 import org.springframework.kafka.support.Acknowledgment;
-import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -16,27 +17,29 @@ public class WithdrawalEventListener {
 
     private final LedgerService ledgerService;
 
+    @RetryableTopic(
+            attempts = "5",
+            backOff = @BackOff(delay = 1000, multiplier = 2.0),
+            kafkaTemplate = "kafkaTemplate"
+
+    )
     @KafkaListener(
-            topics = {
-                    "withdrawal.reserve",
-                    "withdrawal.complete",
-                    "withdrawal.release"
-            },
+            topics = "transaction.withdrawal.confirmed",
             groupId = "${spring.kafka.consumer.group-id}",
             containerFactory = "withdrawalKafkaListenerContainerFactory"
     )
-    public void listen(@Payload WithdrawalEvent event, Acknowledgment acknowledgment) {
-        log.info("Received WithdrawalEvent: ref={}, status={}", event.referenceId(), event.status());
+    public void handleWithdrawalConfirmed(WithdrawalConfirmedEvent event, Acknowledgment ack) {
+        log.info("Received withdrawal confirmed event: {}", event.referenceId());
 
         try {
-            ledgerService.handleWithdrawalEvent(event);
+            ledgerService.processWithdrawal(event);
 
-            acknowledgment.acknowledge();
-
-            log.info("Successfully buffered and acknowledged withdrawal event: {}", event.referenceId());
+            ack.acknowledge();
         } catch (Exception e) {
-            log.error("Failed to process withdrawal event {}: {}", event.referenceId(), e.getMessage());
+            log.error("Error processing withdrawal event: {}", event.referenceId(), e);
         }
+
     }
+
 
 }

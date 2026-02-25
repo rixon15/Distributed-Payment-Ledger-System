@@ -199,7 +199,6 @@ public class PaymentServiceImp implements PaymentService {
                 OutboxEvent.builder()
                         .aggregateId(payment.getId().toString())
                         .eventType("PAYMENT_HELD_FOR_REVIEW")
-                        .status(OutboxStatus.PENDING)
                         .payload(objectMapper.writeValueAsString(payment))
                         .build()
         );

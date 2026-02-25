@@ -1,34 +1,37 @@
 package com.openfashion.ledgerservice.service.imp;
 
-import com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException;
-import com.openfashion.ledgerservice.core.exceptions.InsufficientFundsException;
-import com.openfashion.ledgerservice.core.exceptions.MissingSystemAccountException;
-import com.openfashion.ledgerservice.core.exceptions.UnsupportedTransactionException;
+import com.openfashion.ledgerservice.core.exceptions.*;
+import com.openfashion.ledgerservice.core.util.MoneyUtil;
+import com.openfashion.ledgerservice.dto.ReleaseRequest;
+import com.openfashion.ledgerservice.dto.ReservationRequest;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
-import com.openfashion.ledgerservice.dto.event.WithdrawalEvent;
-import com.openfashion.ledgerservice.dto.redis.PendingTransaction;
+import com.openfashion.ledgerservice.dto.event.WithdrawalConfirmedEvent;
 import com.openfashion.ledgerservice.model.*;
 import com.openfashion.ledgerservice.repository.AccountRepository;
 import com.openfashion.ledgerservice.repository.OutboxRepository;
+import com.openfashion.ledgerservice.repository.PostingRepository;
 import com.openfashion.ledgerservice.repository.TransactionRepository;
 import com.openfashion.ledgerservice.service.LedgerService;
-import com.openfashion.ledgerservice.service.RedisService;
 import com.openfashion.ledgerservice.service.strategy.AccountPair;
 import com.openfashion.ledgerservice.service.strategy.AccountResolutionStrategy;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.serializer.support.SerializationFailedException;
+import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 @Service
 @Slf4j
@@ -37,9 +40,9 @@ public class LedgerServiceImp implements LedgerService {
 
     private final AccountRepository accountRepository;
     private final TransactionRepository transactionRepository;
+    private final PostingRepository postingRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final OutboxRepository outboxRepository;
-    private final RedisService redisService;
     private static final String FAILED_TRANSACTION = "TRANSACTION_FAILED";
     private static final String WITHDRAWAL_ACCOUNT_NAME = "PENDING_WITHDRAWAL";
     private static final String WORLD_ACCOUNT_NAME = "WORLD_LIQUIDITY";
@@ -60,10 +63,17 @@ public class LedgerServiceImp implements LedgerService {
         }
     }
 
-    @Override
+    @Transactional
+    @Retryable(
+            retryFor = OptimisticLockingFailureException.class,
+            maxAttempts = 4,
+            backoff = @Backoff(delay = 50, multiplier = 2))
     public void processTransaction(TransactionRequest request) {
 
         validateTransactionRequest(request);
+
+        long start = System.currentTimeMillis();
+        log.info("Processing transaction with referenceId: {}", request.getReferenceId());
 
         if (transactionRepository.existsByReferenceId(request.getReferenceId())) {
             log.warn("Idempotency Triggered: Transaction {} already processed.", request.getReferenceId());
@@ -77,39 +87,220 @@ public class LedgerServiceImp implements LedgerService {
 
         AccountPair accounts = strategy.resolve(request, accountRepository);
 
-        BigDecimal pendingNet = redisService.getPendingNetChanges(accounts.debit().getId());
-        BigDecimal softBalance = accounts.debit().getBalance().add(pendingNet);
+        Account debitAccount = accounts.debit();
+        Account creditAccount = accounts.credit();
 
-        if (accounts.debit().getType() == AccountType.ASSET && softBalance.compareTo(request.getAmount()) < 0) {
-            saveRejectedTransaction(request, TransactionStatus.REJECTED_NSF);
+        Transaction transaction = Transaction.builder()
+                .referenceId(request.getReferenceId())
+                .type(request.getType())
+                .status(TransactionStatus.PENDING)
+                .effectiveDate(Instant.now())
+                .metadata(request.getMetadata())
+                .build();
+
+        if (debitAccount.getStatus() != AccountStatus.ACTIVE || creditAccount.getStatus() != AccountStatus.ACTIVE) {
+            log.warn("Transaction {} rejected: Account inactive", request.getReferenceId());
+
+            transaction.setStatus(TransactionStatus.REJECTED_INACTIVE);
+            transactionRepository.save(transaction);
+
+            saveOutboxEvent(transaction, FAILED_TRANSACTION);
             return;
         }
 
-        PendingTransaction pendingTransaction = new PendingTransaction(
-                UUID.fromString(request.getReferenceId()),
-                accounts.debit().getId(),
-                accounts.credit().getId(),
-                request.getAmount(),
-                request.getType(),
-                System.currentTimeMillis()
+        // We ONLY enforce NSF checks on User ASSET accounts.
+        // - System Accounts (EQUITY, INCOME, EXPENSE) are unbounded by design (e.g. World Liquidity must go negative to mint money).
+        // - LIABILITY accounts (Credit Cards) would require a different check (Credit Limit), not a Zero-Floor check.
+        if (debitAccount.getType() == AccountType.ASSET && debitAccount.getBalance().compareTo(request.getAmount()) < 0) {
+            transaction.setStatus(TransactionStatus.REJECTED_NSF);
+            transactionRepository.save(transaction);
+            log.info("Transaction rejected (NSF): {}", request.getReferenceId());
 
-        );
+            saveOutboxEvent(transaction, FAILED_TRANSACTION);
+            return;
+        }
 
-        redisService.bufferTransactions(pendingTransaction);
+        List<Posting> postings = new ArrayList<>();
 
-        log.info("Transaction {} accepted and buffered", request.getReferenceId());
+        postings.add(createPosting(transaction, debitAccount, request.getAmount(), PostingDirection.DEBIT));
+        updateBalance(debitAccount, request.getAmount().negate());
+
+        postings.add(createPosting(transaction, creditAccount, request.getAmount(), PostingDirection.CREDIT));
+        updateBalance(creditAccount, request.getAmount());
+
+        transaction.setStatus(TransactionStatus.POSTED);
+
+        accountRepository.save(debitAccount);
+        accountRepository.save(creditAccount);
+        transactionRepository.save(transaction);
+        postingRepository.saveAll(postings);
+
+        saveOutboxEvent(transaction, "TRANSACTION_COMPLETED");
+
+        log.info("Transaction {} processed successfully in {} ms", request.getReferenceId(), System.currentTimeMillis() - start);
 
     }
 
+    @Retryable(
+            retryFor = OptimisticLockingFailureException.class,
+            maxAttempts = 4,
+            backoff = @Backoff(delay = 50, multiplier = 2))
+    @Transactional
     @Override
-    public void handleWithdrawalEvent(WithdrawalEvent event) {
-        log.info("Processing {} for reference: {}", event.status(), event.referenceId());
+    public void reserveFunds(ReservationRequest request) {
 
-        switch (event.status()) {
-            case RESERVED -> bufferReservation(event);
-            case CONFIRMED -> bufferSettlement(event);
-            case FAILED -> bufferRelease(event);
+        log.info("Starting fund reservation for user: {}", request.userId());
+
+        validateReservationRequest(request);
+
+        if (transactionRepository.existsByReferenceId(request.referenceId().toString())) {
+            log.warn("Reservation already exists for reference: {}", request.referenceId());
+            return;
         }
+
+        Account userAccount = accountRepository.findByUserIdAndCurrency(request.userId(), request.currency())
+                .orElseThrow(() -> new AccountNotFoundException(request.userId()));
+        Account pendingAccount = accountRepository.findByNameAndCurrency(WITHDRAWAL_ACCOUNT_NAME, request.currency())
+                .orElseThrow(() -> new MissingSystemAccountException(WITHDRAWAL_ACCOUNT_NAME));
+
+        if (userAccount.getStatus() != AccountStatus.ACTIVE) {
+            throw new AccountInactiveException(userAccount.getId());
+        }
+        if (userAccount.getBalance().compareTo(request.amount()) < 0) {
+            throw new InsufficientFundsException(userAccount.getId());
+        }
+
+        BigDecimal funds = MoneyUtil.format(request.amount());
+
+        Transaction transaction = Transaction.builder()
+                .referenceId(request.referenceId().toString())
+                .type(TransactionType.WITHDRAWAL)
+                .status(TransactionStatus.PENDING)
+                .effectiveDate(Instant.now())
+                .build();
+
+        List<Posting> postings = List.of(
+                createPosting(transaction, userAccount, funds, PostingDirection.DEBIT),
+                createPosting(transaction, pendingAccount, funds, PostingDirection.CREDIT)
+        );
+
+        userAccount.setBalance(userAccount.getBalance().subtract(funds));
+        pendingAccount.setBalance(pendingAccount.getBalance().add(funds));
+
+        transactionRepository.save(transaction);
+        accountRepository.save(userAccount);
+        accountRepository.save(pendingAccount);
+        postingRepository.saveAll(postings);
+
+        log.info("Reservation of {} {} was successful for user: {}", funds, request.currency(), request.userId());
+    }
+
+    @Retryable(
+            retryFor = OptimisticLockingFailureException.class,
+            maxAttempts = 4,
+            backoff = @Backoff(delay = 50, multiplier = 2))
+    @Transactional
+    @Override
+    public void releaseFunds(ReleaseRequest request) {
+        log.info("Attempting to release reserved funds for payment: {}", request.referenceId());
+
+        Transaction transaction = transactionRepository.findByReferenceId(request.referenceId().toString())
+                .orElseThrow(() -> new TransactionNotFoundException(request.referenceId()));
+
+        if (transaction.getStatus() != TransactionStatus.PENDING) {
+            log.warn("Cannot release funds: Transaction {} is already in status {}",
+                    request.referenceId(), transaction.getStatus());
+            return;
+        }
+
+        Posting originalDebit = postingRepository.findByTransactionAndDirection(transaction, PostingDirection.DEBIT)
+                .orElseThrow();
+        Account userAccount = originalDebit.getAccount();
+
+        Account pendingAccount = accountRepository.findByNameAndCurrency(WITHDRAWAL_ACCOUNT_NAME, userAccount.getCurrency())
+                .orElseThrow(() -> new MissingSystemAccountException(WITHDRAWAL_ACCOUNT_NAME));
+
+        BigDecimal amount = originalDebit.getAmount();
+
+        List<Posting> releasePostings = List.of(
+                createPosting(transaction, pendingAccount, amount, PostingDirection.DEBIT),
+                createPosting(transaction, userAccount, amount, PostingDirection.CREDIT)
+        );
+
+        pendingAccount.setBalance(pendingAccount.getBalance().subtract(amount));
+        userAccount.setBalance(userAccount.getBalance().add(amount));
+
+        transaction.setStatus(TransactionStatus.FAILED);
+        transaction.setMetadata("Funds released due to payment failure");
+
+        transactionRepository.save(transaction);
+        accountRepository.save(pendingAccount);
+        accountRepository.save(userAccount);
+        postingRepository.saveAll(releasePostings);
+
+        log.info("Successfully released {} back to user {}", amount, userAccount.getUserId());
+    }
+
+    @Retryable(
+            retryFor = OptimisticLockingFailureException.class,
+            maxAttempts = 4,
+            backoff = @Backoff(delay = 50, multiplier = 2))
+    @Transactional
+    @Override
+    public void processWithdrawal(WithdrawalConfirmedEvent event) {
+
+
+        log.info("Processing withdrawal: {}", event.referenceId());
+
+        validateWithdrawalCompletedEvent(event);
+
+        Transaction pendingTransaction = transactionRepository.findByReferenceId(event.referenceId().toString())
+                .orElseThrow(() -> new TransactionNotFoundException(event.referenceId()));
+
+        if (pendingTransaction.getStatus() != TransactionStatus.PENDING) {
+            throw new IllegalStateException("Transaction status is not PENDING");
+        }
+
+        Posting posting = postingRepository.findByTransactionAndDirection(pendingTransaction, PostingDirection.CREDIT)
+                .orElseThrow(() -> new PostingNotFoundException(
+                        pendingTransaction.getId(),
+                        PostingDirection.CREDIT
+                ));
+
+        if (event.payload().amount().compareTo(posting.getAmount()) != 0) {
+            throw new DataMismatchException("Event data differs from transaction/posting data");
+        }
+
+
+        Account withdrawalAccount = posting.getAccount();
+        Account worldAccount = accountRepository.findByNameAndCurrency(WORLD_ACCOUNT_NAME, CurrencyType.valueOf(event.payload().currency()))
+                .orElseThrow(() -> new MissingSystemAccountException(WORLD_ACCOUNT_NAME));
+
+        List<Posting> postings = List.of(
+                createPosting(pendingTransaction, withdrawalAccount, event.payload().amount(), PostingDirection.DEBIT),
+                createPosting(pendingTransaction, worldAccount, event.payload().amount(), PostingDirection.CREDIT)
+        );
+
+        withdrawalAccount.setBalance(withdrawalAccount.getBalance().subtract(event.payload().amount()));
+        worldAccount.setBalance(worldAccount.getBalance().add(event.payload().amount()));
+
+        pendingTransaction.setStatus(TransactionStatus.POSTED);
+
+        transactionRepository.save(pendingTransaction);
+        accountRepository.save(withdrawalAccount);
+        accountRepository.save(worldAccount);
+        postingRepository.saveAll(postings);
+
+        saveOutboxEvent(pendingTransaction, "WITHDRAWAL_SETTLED");
+        log.info("Withdrawal was successful. Transaction ID: {}", pendingTransaction.getId());
+    }
+
+    private void updateBalance(Account account, BigDecimal amount) {
+        account.setBalance(account.getBalance().add(MoneyUtil.format(amount)));
+    }
+
+    private Posting createPosting(Transaction transaction, Account account, BigDecimal amount, PostingDirection postingDirection) {
+        return Posting.builder().transaction(transaction).account(account).amount(amount).direction(postingDirection).build();
     }
 
     private void validateTransactionRequest(TransactionRequest request) {
@@ -128,6 +319,44 @@ public class LedgerServiceImp implements LedgerService {
 
     }
 
+    private void validateReservationRequest(ReservationRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("ReservationRequest must not be null");
+        }
+        if (request.userId() == null) {
+            throw new IllegalArgumentException("userId must not be null");
+        }
+        if (request.amount() == null) {
+            throw new IllegalArgumentException("amount must not be null");
+        }
+        if (request.amount().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("amount must be positive");
+        }
+        if (request.currency() == null) {
+            throw new IllegalArgumentException("currency must not be null");
+        }
+        if (request.referenceId() == null) {
+            throw new IllegalArgumentException("referenceId must not be null");
+        }
+    }
+
+    private void validateWithdrawalCompletedEvent(WithdrawalConfirmedEvent event) {
+        if (event == null) {
+            throw new IllegalArgumentException("WithdrawalCompleteEvent must not be null");
+        }
+        if (event.referenceId() == null) {
+            throw new IllegalArgumentException("WithdrawalCompleteEvent.referenceId must not be null");
+        }
+        if (event.payload().amount() == null) {
+            throw new IllegalArgumentException("WithdrawalCompleteEvent.amount must not be null");
+        }
+        if (event.payload().currency() == null) {
+            throw new IllegalArgumentException("WithdrawalCompleteEvent.currency must not be null");
+        }
+        if (event.payload().amount().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("WithdrawalCompleteEvent.amount must be positive");
+        }
+    }
 
     private void saveOutboxEvent(Transaction transaction, String eventType) {
 
@@ -150,69 +379,4 @@ public class LedgerServiceImp implements LedgerService {
 
     }
 
-    private void saveRejectedTransaction(TransactionRequest request, TransactionStatus status) {
-        log.warn("Transaction {} rejected: {}", request.getReferenceId(), status);
-
-        Transaction transaction = Transaction.builder()
-                .referenceId(request.getReferenceId())
-                .type(request.getType())
-                .status(status)
-                .effectiveDate(Instant.now())
-                .metadata(request.getMetadata())
-                .build();
-
-        transactionRepository.save(transaction);
-
-        saveOutboxEvent(transaction, FAILED_TRANSACTION);
-    }
-
-    private void bufferReservation(WithdrawalEvent event) {
-        Account userAccount = accountRepository.findByUserIdAndCurrency(event.userId(), event.payload().currency())
-                .orElseThrow(() -> new AccountNotFoundException(event.userId()));
-        Account pendingAccount = getSystemAccount(WITHDRAWAL_ACCOUNT_NAME, event.payload().currency());
-
-        BigDecimal pendingNet = redisService.getPendingNetChanges(userAccount.getId());
-        BigDecimal softBalance = userAccount.getBalance().add(pendingNet);
-
-        if (softBalance.compareTo(event.payload().amount()) < 0) {
-            // Note: If this fails here, it means the Payment Service sent a reservation
-            // for money the user doesn't have. This shouldn't happen if Payment API checks balance too.
-            throw new InsufficientFundsException(userAccount.getId());
-        }
-
-        pushToBuffer(event, userAccount.getUserId(), pendingAccount.getId(), TransactionType.WITHDRAWAL_RESERVE);
-    }
-
-    private void bufferSettlement(WithdrawalEvent event) {
-        Account pendingAccount = getSystemAccount(WITHDRAWAL_ACCOUNT_NAME, event.payload().currency());
-        Account worldAccount = getSystemAccount(WORLD_ACCOUNT_NAME, event.payload().currency());
-
-        pushToBuffer(event, pendingAccount.getId(), worldAccount.getId(), TransactionType.WITHDRAWAL_SETTLE);
-    }
-
-    private void bufferRelease(WithdrawalEvent event) {
-        Account userAccount = accountRepository.findByUserIdAndCurrency(event.userId(), event.payload().currency())
-                .orElseThrow(() -> new AccountNotFoundException(event.userId()));
-        Account pendingAccount = getSystemAccount(WITHDRAWAL_ACCOUNT_NAME, event.payload().currency());
-
-        pushToBuffer(event, pendingAccount.getId(), userAccount.getId(), TransactionType.WITHDRAWAL_RELEASE);
-    }
-
-    private void pushToBuffer(WithdrawalEvent event, UUID debitId, UUID creditId, TransactionType transactionType) {
-        PendingTransaction pendingTransaction = new PendingTransaction(
-                event.referenceId(),
-                debitId,
-                creditId,
-                event.payload().amount(),
-                transactionType,
-                event.timestamp()
-        );
-
-        redisService.bufferTransactions(pendingTransaction);
-    }
-
-    private Account getSystemAccount(String name, CurrencyType currency) {
-        return accountRepository.findByNameAndCurrency(name, currency)
-                .orElseThrow(() -> new MissingSystemAccountException(name));
-    }
 }
