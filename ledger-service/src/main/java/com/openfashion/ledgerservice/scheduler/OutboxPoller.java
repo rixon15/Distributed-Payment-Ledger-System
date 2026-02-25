@@ -63,6 +63,7 @@ public class OutboxPoller {
             case "TRANSACTION_COMPLETED", "WITHDRAWAL_SETTLED" -> TRANSACTION_POSTED_NAME;
             case "WITHDRAWAL_RESERVED" -> "withdrawal.reserve";
             case "TRANSACTION_FAILED" -> "transaction.failed";
+            case "FUNDS_RESERVED_SUCCESS" -> "ledger.funds.reserved";
             case null, default -> "transaction.unknown";
         };
     }

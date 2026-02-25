@@ -5,7 +5,7 @@ Content-Type: application/json
 
 {
   "receiverId": "22222222-2222-2222-2222-222222222222",
-  "idempotencyKey": "transfer-unique-key-018",
+  "idempotencyKey": "transfer-unique-key-023",
   "type": "TRANSFER",
   "amount": 50.00,
   "currency": "USD"
@@ -21,7 +21,7 @@ Content-Type: application/json
   "amount": 500.00,
   "currency": "USD",
   "receiverId": null,
-  "idempotencyKey": "deposit-unique-key-0017"
+  "idempotencyKey": "deposit-unique-key-0021"
 }
 
 ### Test External Withdrawal
@@ -34,7 +34,7 @@ Content-Type: application/json
   "amount": 1000.00,
   "currency": "USD",
   "receiverId": null,
-  "idempotencyKey": "withdraw-unique-key-15"
+  "idempotencyKey": "withdraw-unique-key-23"
 }
 
 ### Test Validation Failure (Missing Receiver for Transfer)

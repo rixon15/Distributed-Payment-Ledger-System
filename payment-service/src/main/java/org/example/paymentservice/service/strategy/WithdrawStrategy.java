@@ -7,9 +7,7 @@ import org.example.paymentservice.model.PaymentStatus;
 import org.example.paymentservice.model.TransactionType;
 import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
-import org.example.paymentservice.simulator.bank.dto.BankPaymentRequest;
 import org.example.paymentservice.simulator.bank.dto.BankPaymentResponse;
-import org.example.paymentservice.simulator.bank.dto.BankPaymentStatus;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -43,29 +41,26 @@ public class WithdrawStrategy extends PaymentStrategy {
         CompletableFuture.runAsync(() -> callBankApi(payment));
     }
 
-    private void callBankApi(Payment payment) {
-        BankPaymentRequest bankRequest = new BankPaymentRequest(
-                payment.getId(),
-                "EXT-ACCT-" + payment.getUserId(),
-                payment.getAmount(),
-                payment.getCurrency().getCode()
-        );
+    public void callBankApi(Payment payment) {
 
+       try {
+           BankPaymentResponse existingStatus = checkExternalStatus(payment.getId().toString());
+
+           reconcileWithBank(payment, existingStatus, bankUrl);
+       } catch (Exception e) {
+           log.error("Reconciliation inquiry failed for payment {}. Retrying later.", payment.getId(), e);
+       }
+    }
+
+    private BankPaymentResponse checkExternalStatus(String paymentId) {
         try {
-            BankPaymentResponse bankResult = restClient.post()
-                    .uri(bankUrl + "/pay")
-                    .body(bankRequest)
+            return restClient.get()
+                    .uri(bankUrl + "/status/" + paymentId) // Ensure bankUrl is available in base or passed in
                     .retrieve()
                     .body(BankPaymentResponse.class);
-
-            if (bankResult != null && bankResult.status() == BankPaymentStatus.APPROVED) {
-                finalizeStatus(payment, PaymentStatus.AUTHORIZED, bankResult.transactionId());
-            } else {
-                handleFailure(payment, "Bank Declined", bankResult != null ? bankResult.reasonCode() : "Unknown");
-            }
         } catch (Exception e) {
-            log.error("Bank call failed for payment {}", payment.getId(), e);
-            // Leave as PENDING; Recovery scheduler will retry bank call later
+            log.error("Failed to fetch external status for payment {}", paymentId, e);
+            return null;
         }
     }
 }

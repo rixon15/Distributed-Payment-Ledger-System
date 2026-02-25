@@ -7,6 +7,8 @@ import org.example.paymentservice.dto.event.*;
 import org.example.paymentservice.model.*;
 import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
+import org.example.paymentservice.simulator.bank.dto.BankPaymentRequest;
+import org.example.paymentservice.simulator.bank.dto.BankPaymentResponse;
 import org.springframework.core.serializer.support.SerializationFailedException;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
@@ -78,7 +80,7 @@ public abstract class PaymentStrategy {
             saveOutboxEvent(payment, "TRANSACTION_FAILED", userMessage);
 
             if (payment.getType() == TransactionType.WITHDRAWAL) {
-                saveOutboxEvent(payment, "WITHDRAWAL_FAILED", internalReason);
+                emitWithdrawalEvent(payment, WithdrawalStatus.FAILED);
             }
         });
     }
@@ -126,6 +128,52 @@ public abstract class PaymentStrategy {
                     .build());
         } catch (Exception e) {
             throw new RuntimeException("Event serialization failed", e);
+        }
+    }
+
+    protected void reconcileWithBank(Payment payment, BankPaymentResponse bankResult, String bankUrl) {
+        if (bankResult == null) return;
+
+        switch (bankResult.status()) {
+            case APPROVED -> {
+                log.info("Bank Status SUCCESS: Finalizing payment {} as AUTHORIZED", payment.getId());
+                finalizeStatus(payment, PaymentStatus.AUTHORIZED, bankResult.transactionId());
+            }
+            case DECLINED -> {
+                log.warn("Bank Status DECLINED: Failing payment {}", payment.getId());
+                handleFailure(payment, "Bank Declined", bankResult.reasonCode());
+            }
+            case PENDING -> {
+                log.info("Bank Status PENDING: No action taken for {}. Will retry inquiry.", payment.getId());
+            }
+            case NOT_FOUND -> {
+                log.info("Bank Status NOT_FOUND: Proceeding with fresh execution for {}", payment.getId());
+                // This is the only state where we actually call the POST /pay endpoint
+                executeNewPayment(payment, bankUrl);
+            }
+
+        }
+    }
+
+    private void executeNewPayment(Payment payment, String bankUrl) {
+        BankPaymentRequest bankRequest = new BankPaymentRequest(
+                payment.getId(),
+                "EXT-ACCT-" + payment.getUserId(),
+                payment.getAmount(),
+                payment.getCurrency().getCode()
+        );
+
+        try {
+            BankPaymentResponse response = restClient.post()
+                    .uri(bankUrl + "/pay")
+                    .body(bankRequest)
+                    .retrieve()
+                    .body(BankPaymentResponse.class);
+
+            // After the POST, we use the same reconciliation logic
+            reconcileWithBank(payment, response, bankUrl);
+        } catch (Exception e) {
+            log.error("POST /pay failed for payment {}. Recovery scheduler will inquire status later.", payment.getId());
         }
     }
 }
