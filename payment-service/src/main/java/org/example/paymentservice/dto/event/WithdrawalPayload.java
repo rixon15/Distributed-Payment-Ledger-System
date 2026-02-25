@@ -1,6 +1,7 @@
-package com.openfashion.ledgerservice.dto.event;
+package org.example.paymentservice.dto.event;
 
-import com.openfashion.ledgerservice.model.CurrencyType;
+
+import org.example.paymentservice.model.CurrencyType;
 
 import java.math.BigDecimal;
 
