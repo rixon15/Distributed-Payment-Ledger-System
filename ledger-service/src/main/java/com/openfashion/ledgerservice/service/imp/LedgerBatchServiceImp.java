@@ -38,10 +38,6 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
 
         Set<UUID> accountIds = new HashSet<>();
         Set<String> refIds = new HashSet<>();
-        Map<UUID, BigDecimal> balanceChanges = new HashMap<>();
-        List<Transaction> transactionsToSave = new ArrayList<>();
-        List<OutboxEvent> outboxEventsToSave = new ArrayList<>();
-        List<Posting> postingsToSave = new ArrayList<>();
 
         for (PendingTransaction pendingTransaction : batch) {
             accountIds.add(pendingTransaction.debitAccountId());
@@ -55,8 +51,19 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         Map<String, Transaction> existingTransactionMap = transactionRepository.findAllByReferenceIdIn(refIds)
                 .stream().collect(Collectors.toMap(Transaction::getReferenceId, Function.identity()));
 
+
+        Map<String, Transaction> sessionTransactions = new HashMap<>();
+        Map<UUID, BigDecimal> balanceChanges = new HashMap<>();
+        List<Transaction> transactionsToSave = new ArrayList<>();
+        List<OutboxEvent> outboxEventsToSave = new ArrayList<>();
+        List<Posting> postingsToSave = new ArrayList<>();
+
+
         for (PendingTransaction pendingTransaction : batch) {
-            Transaction transaction = existingTransactionMap.get(pendingTransaction.referenceId().toString());
+
+            String refIdStr = pendingTransaction.referenceId().toString();
+
+            Transaction transaction = existingTransactionMap.getOrDefault(refIdStr, sessionTransactions.get(refIdStr));
             Account debitAccount = accountMap.get(pendingTransaction.debitAccountId());
             Account creditAccount = accountMap.get(pendingTransaction.creditAccountId());
 
@@ -66,8 +73,12 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
             }
 
             switch (pendingTransaction.type()) {
-                case WITHDRAWAL_RESERVE ->
-                        handleReserve(pendingTransaction, debitAccount, creditAccount, transactionsToSave, postingsToSave, balanceChanges, outboxEventsToSave);
+                case WITHDRAWAL_RESERVE -> {
+                    Transaction newTransaction = createBaseTransaction(pendingTransaction, TransactionStatus.PENDING);
+                    transactionsToSave.add(newTransaction);
+                    sessionTransactions.put(refIdStr, newTransaction);
+                    handleReserve(pendingTransaction, newTransaction, debitAccount, creditAccount, postingsToSave, balanceChanges, outboxEventsToSave);
+                }
 
                 case WITHDRAWAL_SETTLE ->
                         handleSettle(pendingTransaction, transaction, debitAccount, creditAccount, postingsToSave, balanceChanges, outboxEventsToSave);
@@ -76,7 +87,11 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
                         handleRelease(pendingTransaction, transaction, debitAccount, creditAccount, postingsToSave, balanceChanges, outboxEventsToSave);
 
                 default -> // Normal Transfers/Deposits/Fees
-                        handleStandard(pendingTransaction, debitAccount, creditAccount, transactionsToSave, postingsToSave, balanceChanges, outboxEventsToSave);
+                {
+                    Transaction newTransaction = createBaseTransaction(pendingTransaction, TransactionStatus.POSTED);
+                    transactionsToSave.add(newTransaction);
+                    handleStandard(pendingTransaction, newTransaction, debitAccount, creditAccount, postingsToSave, balanceChanges, outboxEventsToSave);
+                }
             }
         }
 
@@ -113,20 +128,21 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
                 .build();
     }
 
-    private void handleReserve(PendingTransaction pt, Account debit, Account credit, List<Transaction> txs,
+    private void handleReserve(PendingTransaction pt, Transaction tx, Account debit, Account credit,
                                List<Posting> posts, Map<UUID, BigDecimal> balances, List<OutboxEvent> events) {
-        Transaction tx = createBaseTransaction(pt, TransactionStatus.PENDING);
-        txs.add(tx);
         applyPostings(pt, tx, debit, credit, posts, balances);
         events.add(createOutboxEvent(pt, pt.referenceId().toString(), "WITHDRAWAL_RESERVED"));
     }
 
     private void handleSettle(PendingTransaction pt, Transaction tx, Account debit, Account credit,
                               List<Posting> posts, Map<UUID, BigDecimal> balances, List<OutboxEvent> events) {
-        if (tx == null) return; //should handle as error or retry
+        if (tx == null) {
+            log.error("Settle failed: Transaction not found for ref {}", pt.referenceId());
+            return;
+        }
         tx.setStatus(TransactionStatus.POSTED);
         applyPostings(pt, tx, debit, credit, posts, balances);
-        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "TRANSACTION_COMPLETED"));
+        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "WITHDRAWAL_SETTLED"));
     }
 
     private void handleRelease(PendingTransaction pt, Transaction tx, Account debit, Account credit,
@@ -138,19 +154,16 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         events.add(createOutboxEvent(pt, pt.referenceId().toString(), "TRANSACTION_FAILED"));
     }
 
-    private void handleStandard(PendingTransaction pt, Account debit, Account credit, List<Transaction> txs,
+    private void handleStandard(PendingTransaction pt, Transaction tx, Account debit, Account credit,
                                 List<Posting> posts, Map<UUID, BigDecimal> balances, List<OutboxEvent> events) {
-        // Standard transfers are POSTED immediately in the DB
-        Transaction tx = createBaseTransaction(pt, TransactionStatus.POSTED);
-        txs.add(tx);
         applyPostings(pt, tx, debit, credit, posts, balances);
         events.add(createOutboxEvent(pt, pt.referenceId().toString(), "TRANSACTION_COMPLETED"));
     }
 
     private void applyPostings(PendingTransaction pt, Transaction tx, Account debit, Account credit, List<Posting> posts,
                                Map<UUID, BigDecimal> balances) {
-        posts.add(new Posting(pt.referenceId(), tx, debit, pt.amount(), PostingDirection.DEBIT));
-        posts.add(new Posting(pt.referenceId(), tx, credit, pt.amount(), PostingDirection.CREDIT));
+        posts.add(new Posting(tx, debit, pt.amount(), PostingDirection.DEBIT));
+        posts.add(new Posting(tx, credit, pt.amount(), PostingDirection.CREDIT));
         balances.merge(debit.getId(), pt.amount().negate(), BigDecimal::add);
         balances.merge(credit.getId(), pt.amount(), BigDecimal::add);
     }

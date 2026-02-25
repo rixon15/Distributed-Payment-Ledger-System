@@ -21,7 +21,7 @@ import java.util.concurrent.TimeoutException;
 public class OutboxPoller {
 
     private final OutboxRepository outboxRepository;
-    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final KafkaTemplate<String, Object> kafkaTemplate;
     private static final String TRANSACTION_POSTED_NAME = "transaction.posted";
 
     @Scheduled(fixedDelay = 2000)
@@ -59,11 +59,8 @@ public class OutboxPoller {
     private String determineTopic(String eventType) {
         return switch (eventType) {
             case "TRANSACTION_COMPLETED", "WITHDRAWAL_SETTLED" -> TRANSACTION_POSTED_NAME;
-
             case "WITHDRAWAL_RESERVED" -> "withdrawal.reserved";
-
             case "TRANSACTION_FAILED" -> "transaction.failed";
-
             case null, default -> "transaction.unknown";
         };
     }

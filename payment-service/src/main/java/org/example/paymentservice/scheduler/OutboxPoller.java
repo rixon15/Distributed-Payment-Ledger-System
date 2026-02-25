@@ -58,9 +58,10 @@ public class OutboxPoller {
     private String determineTopic(String eventType) {
         return switch (eventType) {
             case "TRANSACTION_INITIATED" -> "transaction.initiated";
-            case "TRANSACTION_WITHDRAWAL_CONFIRMED" -> "transaction.withdrawal.confirmed";
-            case "TRANSACTION_FAILED" -> "transaction.failed";
-            case null, default -> "transaction.unknown";
+            case "WITHDRAWAL_RESERVED" -> "withdrawal.reserve";
+            case "WITHDRAWAL_CONFIRMED" -> "withdrawal.complete";
+            case "WITHDRAWAL_FAILED" -> "withdrawal.release";
+            default -> "transaction.unknown";
         };
     }
 

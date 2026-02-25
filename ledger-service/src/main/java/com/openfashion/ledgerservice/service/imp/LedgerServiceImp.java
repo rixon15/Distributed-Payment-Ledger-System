@@ -167,8 +167,8 @@ public class LedgerServiceImp implements LedgerService {
     }
 
     private void bufferReservation(WithdrawalEvent event) {
-        Account userAccount = accountRepository.findByUserIdAndCurrency(event.usersId(), event.payload().currency())
-                .orElseThrow(() -> new AccountNotFoundException(event.usersId()));
+        Account userAccount = accountRepository.findByUserIdAndCurrency(event.userId(), event.payload().currency())
+                .orElseThrow(() -> new AccountNotFoundException(event.userId()));
         Account pendingAccount = getSystemAccount(WITHDRAWAL_ACCOUNT_NAME, event.payload().currency());
 
         BigDecimal pendingNet = redisService.getPendingNetChanges(userAccount.getId());
@@ -191,8 +191,8 @@ public class LedgerServiceImp implements LedgerService {
     }
 
     private void bufferRelease(WithdrawalEvent event) {
-        Account userAccount = accountRepository.findByUserIdAndCurrency(event.usersId(), event.payload().currency())
-                .orElseThrow(() -> new AccountNotFoundException(event.usersId()));
+        Account userAccount = accountRepository.findByUserIdAndCurrency(event.userId(), event.payload().currency())
+                .orElseThrow(() -> new AccountNotFoundException(event.userId()));
         Account pendingAccount = getSystemAccount(WITHDRAWAL_ACCOUNT_NAME, event.payload().currency());
 
         pushToBuffer(event, pendingAccount.getId(), userAccount.getId(), TransactionType.WITHDRAWAL_RELEASE);
