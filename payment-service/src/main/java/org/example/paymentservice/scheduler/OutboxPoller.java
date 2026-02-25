@@ -24,11 +24,13 @@ public class OutboxPoller {
 
     private final OutboxRepository outboxRepository;
     private final KafkaTemplate<String, String> kafkaTemplate;
+    private static final int DELAY = 2000;
+    private static final int LIMIT = 100;
 
-    @Scheduled(fixedDelay = 50)
+    @Scheduled(fixedDelay = DELAY)
     @Transactional
     public void processOutboxEvent() {
-        List<OutboxEvent> events = outboxRepository.findTopForProcessing(500);
+        List<OutboxEvent> events = outboxRepository.findTopForProcessing(LIMIT);
 
         if (events.isEmpty()) return;
 

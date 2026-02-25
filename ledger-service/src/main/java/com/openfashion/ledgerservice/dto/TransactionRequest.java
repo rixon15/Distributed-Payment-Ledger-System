@@ -13,7 +13,7 @@ import java.util.UUID;
 public class TransactionRequest {
 
     @NotNull(message = "Reference ID is required")
-    private String referenceId;
+    private UUID referenceId;
     @NotNull(message = "Transaction Type is required")
     private TransactionType type;
     private UUID senderId;

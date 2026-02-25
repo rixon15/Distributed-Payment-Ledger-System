@@ -43,6 +43,7 @@ public class TransactionEventListener {
             acknowledgment.acknowledge();
         } catch (Exception e) {
             log.error("Error processing transaction event: {}", event.referenceId(), e);
+            //TODO: Create wrapper around the event to keep count of retry and if retry > 3 move to DLQ
         }
     }
 

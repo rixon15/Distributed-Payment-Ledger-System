@@ -26,7 +26,6 @@ public class WithdrawStrategy extends PaymentStrategy {
 
     public WithdrawStrategy(PaymentRepository paymentRepository, OutboxRepository outboxRepository,
                             ObjectMapper objectMapper, TransactionTemplate tx, RestClient restClient,
-                            @Value("${app.ledger.url}") String ledgerUrl,
                             @Value("${app.bank.url}") String bankUrl) {
         super(paymentRepository, outboxRepository, objectMapper, tx, restClient);
         this.bankUrl = bankUrl;

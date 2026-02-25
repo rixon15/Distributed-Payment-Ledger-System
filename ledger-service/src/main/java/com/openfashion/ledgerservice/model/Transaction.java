@@ -25,7 +25,7 @@ public class Transaction {
     private UUID id;
 
     @Column(nullable = false, unique = true)
-    private String referenceId;
+    private UUID referenceId;
 
     @Column(nullable = false, length = 50)
     @Enumerated(EnumType.STRING)

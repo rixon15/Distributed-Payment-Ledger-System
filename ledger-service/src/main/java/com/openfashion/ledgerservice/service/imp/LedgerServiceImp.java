@@ -65,7 +65,7 @@ public class LedgerServiceImp implements LedgerService {
 
         validateTransactionRequest(request);
 
-        if (transactionRepository.existsByReferenceId(request.getReferenceId())) {
+        if (transactionRepository.existsByReferenceId(request.getReferenceId().toString())) {
             log.warn("Idempotency Triggered: Transaction {} already processed.", request.getReferenceId());
             return;
         }
@@ -86,13 +86,12 @@ public class LedgerServiceImp implements LedgerService {
         }
 
         PendingTransaction pendingTransaction = new PendingTransaction(
-                UUID.fromString(request.getReferenceId()),
+                request.getReferenceId(),
                 accounts.debit().getId(),
                 accounts.credit().getId(),
                 request.getAmount(),
                 request.getType(),
                 System.currentTimeMillis()
-
         );
 
         redisService.bufferTransactions(pendingTransaction);
@@ -135,7 +134,7 @@ public class LedgerServiceImp implements LedgerService {
             String jsonPayload = objectMapper.writeValueAsString(transaction);
 
             OutboxEvent outboxEvent = OutboxEvent.builder()
-                    .aggregateId(transaction.getReferenceId())
+                    .aggregateId(transaction.getReferenceId().toString())
                     .eventType(eventType)
                     .payload(jsonPayload)
                     .status(OutboxStatus.PENDING)
@@ -198,6 +197,7 @@ public class LedgerServiceImp implements LedgerService {
         pushToBuffer(event, pendingAccount.getId(), userAccount.getId(), TransactionType.WITHDRAWAL_RELEASE);
     }
 
+    //TODO: switch from using userId to internal userAccount id
     private void pushToBuffer(WithdrawalEvent event, UUID debitId, UUID creditId, TransactionType transactionType) {
         PendingTransaction pendingTransaction = new PendingTransaction(
                 event.referenceId(),

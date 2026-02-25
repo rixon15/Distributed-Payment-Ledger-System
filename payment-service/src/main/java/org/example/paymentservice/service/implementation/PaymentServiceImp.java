@@ -24,6 +24,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -201,6 +202,7 @@ public class PaymentServiceImp implements PaymentService {
                         .eventType("PAYMENT_HELD_FOR_REVIEW")
                         .status(OutboxStatus.PENDING)
                         .payload(objectMapper.writeValueAsString(payment))
+                        .createdAt(Instant.now())
                         .build()
         );
     }

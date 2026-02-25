@@ -76,13 +76,17 @@ public abstract class PaymentStrategy {
             paymentRepository.save(payment);
 
             saveOutboxEvent(payment, "TRANSACTION_FAILED", userMessage);
+
+            if (payment.getType() == TransactionType.WITHDRAWAL) {
+                saveOutboxEvent(payment, "WITHDRAWAL_FAILED", internalReason);
+            }
         });
     }
 
     protected void finalizeStatus(Payment payment, PaymentStatus status, UUID externalId) {
         tx.executeWithoutResult(ts -> {
             payment.setStatus(status);
-            if (externalId != null) payment.setExternalTransactionId(externalId.toString());
+            payment.setExternalTransactionId(externalId != null ? externalId.toString() : null);
             paymentRepository.save(payment);
 
             // Map PaymentStatus to Ledger's WithdrawalStatus

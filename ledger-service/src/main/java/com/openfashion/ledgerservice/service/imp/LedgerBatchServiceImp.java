@@ -53,7 +53,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         }
 
 
-        Map<String, Transaction> existingTransactionMap = transactionRepository.findAllByReferenceIdIn(refIds)
+        Map<UUID, Transaction> existingTransactionMap = transactionRepository.findAllByReferenceIdIn(refIds)
                 .stream().collect(Collectors.toMap(Transaction::getReferenceId, Function.identity()));
 
 
@@ -79,6 +79,11 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
 
             switch (pendingTransaction.type()) {
                 case WITHDRAWAL_RESERVE -> {
+
+                    if (existingTransactionMap.containsKey(UUID.fromString(refIdStr))) {
+                        log.info("Skipping RESERVE for {}. Already exists in DB", refIdStr);
+                    }
+
                     Transaction newTransaction = createBaseTransaction(pendingTransaction, TransactionStatus.PENDING);
                     transactionsToSave.add(newTransaction);
                     sessionTransactions.put(refIdStr, newTransaction);
@@ -116,7 +121,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
 
         return transactionRepository.findAllByReferenceIdIn(refIds).stream()
                 .filter(tx -> tx.getStatus() == TransactionStatus.POSTED || tx.getStatus() == TransactionStatus.FAILED)
-                .map(tx -> UUID.fromString(tx.getReferenceId()))
+                .map(Transaction::getReferenceId)
                 .toList();
     }
 
@@ -126,7 +131,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         //Could save to dedicated DLQ table?
 
         Transaction failedTx = Transaction.builder()
-                .referenceId(pt.referenceId().toString())
+                .referenceId(pt.referenceId())
                 .type(pt.type())
                 .status(TransactionStatus.FAILED)
                 .metadata(objectMapper.writeValueAsString(Map.of("error", reason)))
@@ -134,7 +139,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
                 .build();
 
         transactionRepository.save(failedTx);
-        outboxRepository.save(createOutboxEvent(failedTx, failedTx.getReferenceId(), "TRANSACTION_FAILED"));
+        outboxRepository.save(createOutboxEvent(failedTx, failedTx.getReferenceId().toString(), "TRANSACTION_FAILED"));
     }
 
     private OutboxEvent createOutboxEvent(Object payload, String referenceId, String type) {
@@ -188,7 +193,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
 
     private Transaction createBaseTransaction(PendingTransaction pt, TransactionStatus status) {
         return Transaction.builder()
-                .referenceId(pt.referenceId().toString())
+                .referenceId(pt.referenceId())
                 .type(pt.type())
                 .status(status)
                 .effectiveDate(Instant.ofEpochMilli(pt.timestamp()))

@@ -35,7 +35,8 @@ public class WithdrawalEventListener {
 
             log.info("Successfully buffered and acknowledged withdrawal event: {}", event.referenceId());
         } catch (Exception e) {
-            log.error("Failed to process withdrawal event {}: {}", event.referenceId(), e.getMessage());
+            log.error("Failed to process withdrawal event {}: {}", event.referenceId(), e.getMessage(), e);
+            //TODO: Create wrapper around the event to keep count of retry and if retry > 3 move to DLQ
         }
     }
 

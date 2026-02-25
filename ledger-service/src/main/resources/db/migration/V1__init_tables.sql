@@ -26,7 +26,7 @@ CREATE TABLE postings
 CREATE TABLE transactions
 (
     id             UUID                     NOT NULL,
-    reference_id   VARCHAR(255)             NOT NULL,
+    reference_id   UUID                     NOT NULL,
     type           VARCHAR(20)              NOT NULL,
     status         VARCHAR(20)              NOT NULL,
     metadata       JSONB,

@@ -19,12 +19,13 @@ import java.util.UUID;
 public class LedgerCommitter {
 
     private final RedisTemplate<String, PendingTransaction> logTemplate;
-
     private final LedgerBatchService ledgerBatchService;
 
     private static final String QUEUE_KEY = "ledger:queue";
     private static final String PROCESSING_KEY = "ledger:queue:processing";
+    private static final String DLQ_KEY = "ledger:queue:dead-letter";
     private static final int BATCH_SIZE = 1000;
+    private static final int DELAY = 500;
 
     @PostConstruct
     public void recoverStuckTransactions() {
@@ -38,7 +39,7 @@ public class LedgerCommitter {
         }
     }
 
-    @Scheduled(fixedDelay = 500)
+    @Scheduled(fixedDelay = DELAY)
     public void commitLedger() {
         List<PendingTransaction> batch = fetchBatch();
 
@@ -61,8 +62,7 @@ public class LedgerCommitter {
             logTemplate.delete(PROCESSING_KEY);
         } catch (Exception e) {
             log.error("Failed to commit ledger batch. Transactions will remain in Redis for retry.", e);
-            //These transactions should be moved back to the main queue or should be moved to DLQ
-            //We'll leave it as it is for now.
+            handleBatchFailure(batch);
         }
     }
 
@@ -79,6 +79,17 @@ public class LedgerCommitter {
         }
 
         return batch;
+    }
+
+    private void handleBatchFailure(List<PendingTransaction> failedBatch) {
+        try {
+            for (PendingTransaction pt : failedBatch) {
+                logTemplate.opsForList().rightPopAndLeftPush(PROCESSING_KEY, QUEUE_KEY);
+            }
+            log.info("Recovery complete: {} transactions returned to main queue.", failedBatch.size());
+        } catch (Exception recoveryError) {
+            log.error("CRITICAL: Recovery failed. Data may be stuck in {}", PROCESSING_KEY, recoveryError);
+        }
     }
 
 
