@@ -24,10 +24,10 @@ public class OutboxPoller {
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private static final String TRANSACTION_POSTED_NAME = "transaction.posted";
 
-    @Scheduled(fixedDelay = 2000)
+    @Scheduled(fixedDelay = 50)
     @Transactional
     public void processOutboxEvent() {
-        List<OutboxEvent> events = outboxRepository.findTop50ForProcessing();
+        List<OutboxEvent> events = outboxRepository.findTopForProcessing(500);
 
         if (events.isEmpty()) return;
 

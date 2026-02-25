@@ -17,7 +17,11 @@ public class WithdrawalEventListener {
     private final LedgerService ledgerService;
 
     @KafkaListener(
-            topics = "${app.kafka.topics.withdrawal-events:withdrawal-events}",
+            topics = {
+                    "withdrawal.reserve",
+                    "withdrawal.complete",
+                    "withdrawal.release"
+            },
             groupId = "${spring.kafka.consumer.group-id}",
             containerFactory = "withdrawalKafkaListenerContainerFactory"
     )

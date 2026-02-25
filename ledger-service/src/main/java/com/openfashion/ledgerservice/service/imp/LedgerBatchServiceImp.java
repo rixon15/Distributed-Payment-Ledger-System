@@ -45,8 +45,13 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
             refIds.add(pendingTransaction.referenceId().toString());
         }
 
-        Map<UUID, Account> accountMap = accountRepository.findAllById(accountIds)
-                .stream().collect(Collectors.toMap(Account::getId, Function.identity()));
+        List<Account> accounts = accountRepository.findAllByIdOrUserIdIn(accountIds);
+        Map<UUID, Account> accountMap = new HashMap<>();
+        for (Account acc : accounts) {
+            accountMap.put(acc.getId(), acc);     // Index by DB ID (for system accounts)
+            accountMap.put(acc.getUserId(), acc); // Index by User ID (for user accounts)
+        }
+
 
         Map<String, Transaction> existingTransactionMap = transactionRepository.findAllByReferenceIdIn(refIds)
                 .stream().collect(Collectors.toMap(Transaction::getReferenceId, Function.identity()));
@@ -104,6 +109,17 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         redisService.commitFromBuffer(batch);
     }
 
+    public List<UUID> findAlreadyProcessedIds(List<PendingTransaction> batch) {
+        Set<String> refIds = batch.stream()
+                .map(pt -> pt.referenceId().toString())
+                .collect(Collectors.toSet());
+
+        return transactionRepository.findAllByReferenceIdIn(refIds).stream()
+                .filter(tx -> tx.getStatus() == TransactionStatus.POSTED || tx.getStatus() == TransactionStatus.FAILED)
+                .map(tx -> UUID.fromString(tx.getReferenceId()))
+                .toList();
+    }
+
     private void handleDeadLetter(PendingTransaction pt, String reason) {
         log.error("Dead Letter Triggered for {}:{}", pt.referenceId(), reason);
 
@@ -111,8 +127,10 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
 
         Transaction failedTx = Transaction.builder()
                 .referenceId(pt.referenceId().toString())
+                .type(pt.type())
                 .status(TransactionStatus.FAILED)
                 .metadata(objectMapper.writeValueAsString(Map.of("error", reason)))
+                .effectiveDate(Instant.ofEpochMilli(pt.timestamp()))
                 .build();
 
         transactionRepository.save(failedTx);

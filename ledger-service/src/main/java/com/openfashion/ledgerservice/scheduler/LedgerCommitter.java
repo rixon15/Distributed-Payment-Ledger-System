@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @Component
 @RequiredArgsConstructor
@@ -23,7 +24,7 @@ public class LedgerCommitter {
 
     private static final String QUEUE_KEY = "ledger:queue";
     private static final String PROCESSING_KEY = "ledger:queue:processing";
-    private static final int BATCH_SIZE = 100;
+    private static final int BATCH_SIZE = 1000;
 
     @PostConstruct
     public void recoverStuckTransactions() {
@@ -37,14 +38,25 @@ public class LedgerCommitter {
         }
     }
 
-    @Scheduled(fixedDelay = 1000)
+    @Scheduled(fixedDelay = 500)
     public void commitLedger() {
         List<PendingTransaction> batch = fetchBatch();
 
         if (batch.isEmpty()) return;
 
         try {
-            ledgerBatchService.processBatch(batch);
+
+            List<UUID> processedIds = ledgerBatchService.findAlreadyProcessedIds(batch);
+
+            if (!processedIds.isEmpty()) {
+                log.warn("Recovery: Found {} transactions already in DB. Cleaning Redis", processedIds.size());
+
+                batch = batch.stream().filter(pt -> !processedIds.contains(pt.referenceId())).toList();
+            }
+
+            if (!batch.isEmpty()) {
+                ledgerBatchService.processBatch(batch);
+            }
 
             logTemplate.delete(PROCESSING_KEY);
         } catch (Exception e) {

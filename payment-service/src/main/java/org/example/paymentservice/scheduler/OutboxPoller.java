@@ -25,10 +25,10 @@ public class OutboxPoller {
     private final OutboxRepository outboxRepository;
     private final KafkaTemplate<String, String> kafkaTemplate;
 
-    @Scheduled(fixedDelay = 2000)
+    @Scheduled(fixedDelay = 50)
     @Transactional
     public void processOutboxEvent() {
-        List<OutboxEvent> events = outboxRepository.findTop50ForProcessing();
+        List<OutboxEvent> events = outboxRepository.findTopForProcessing(500);
 
         if (events.isEmpty()) return;
 
