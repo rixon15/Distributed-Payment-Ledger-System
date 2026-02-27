@@ -5,10 +5,7 @@ import org.example.paymentservice.simulator.bank.dto.BankPaymentResponse;
 import org.example.paymentservice.simulator.bank.dto.BankPaymentStatus;
 import org.example.paymentservice.simulator.bank.exceptions.BankErrorException;
 import org.springframework.context.annotation.Profile;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 import java.util.UUID;
@@ -46,11 +43,11 @@ public class MockBankController {
         } else if (roll < 15) {
             throw new BankErrorException();
         } else {
-        response = new BankPaymentResponse(
-                UUID.randomUUID(),
-                BankPaymentStatus.APPROVED,
-                "SUCCESS"
-        );
+            response = new BankPaymentResponse(
+                    UUID.randomUUID(),
+                    BankPaymentStatus.APPROVED,
+                    "SUCCESS"
+            );
         }
 
         idempotencyStore.put(request.referenceId(), response);
@@ -58,5 +55,25 @@ public class MockBankController {
         return response;
     }
 
+    @GetMapping("/status/{referenceId}")
+    public BankPaymentResponse statusCheck(@PathVariable UUID referenceId) {
+        BankPaymentResponse response;
+
+        if (idempotencyStore.containsKey(referenceId)) {
+            response = new BankPaymentResponse(
+                    UUID.randomUUID(),
+                    BankPaymentStatus.APPROVED,
+                    "TRANSACTION ALREADY PROCESSED"
+            );
+        } else {
+            response = new BankPaymentResponse(
+                    UUID.randomUUID(),
+                    BankPaymentStatus.NOT_FOUND,
+                    "TRANSACTION NOT PROCESSED YET"
+            );
+        }
+
+        return response;
+    }
 
 }

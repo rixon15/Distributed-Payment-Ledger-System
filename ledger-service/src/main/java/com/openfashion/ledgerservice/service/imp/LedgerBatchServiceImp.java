@@ -37,12 +37,12 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         log.info("Committing batch of {} transaction to Postgres", batch.size());
 
         Set<UUID> accountIds = new HashSet<>();
-        Set<String> refIds = new HashSet<>();
+        Set<UUID> refIds = new HashSet<>();
 
         for (PendingTransaction pendingTransaction : batch) {
             accountIds.add(pendingTransaction.debitAccountId());
             accountIds.add(pendingTransaction.creditAccountId());
-            refIds.add(pendingTransaction.referenceId().toString());
+            refIds.add(pendingTransaction.referenceId());
         }
 
         List<Account> accounts = accountRepository.findAllByIdOrUserIdIn(accountIds);
@@ -57,7 +57,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
                 .stream().collect(Collectors.toMap(Transaction::getReferenceId, Function.identity()));
 
 
-        Map<String, Transaction> sessionTransactions = new HashMap<>();
+        Map<UUID, Transaction> sessionTransactions = new HashMap<>();
         Map<UUID, BigDecimal> balanceChanges = new HashMap<>();
         List<Transaction> transactionsToSave = new ArrayList<>();
         List<OutboxEvent> outboxEventsToSave = new ArrayList<>();
@@ -66,9 +66,9 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
 
         for (PendingTransaction pendingTransaction : batch) {
 
-            String refIdStr = pendingTransaction.referenceId().toString();
+            UUID refId = pendingTransaction.referenceId();
 
-            Transaction transaction = existingTransactionMap.getOrDefault(refIdStr, sessionTransactions.get(refIdStr));
+            Transaction transaction = existingTransactionMap.getOrDefault(refId, sessionTransactions.get(refId));
             Account debitAccount = accountMap.get(pendingTransaction.debitAccountId());
             Account creditAccount = accountMap.get(pendingTransaction.creditAccountId());
 
@@ -80,13 +80,14 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
             switch (pendingTransaction.type()) {
                 case WITHDRAWAL_RESERVE -> {
 
-                    if (existingTransactionMap.containsKey(UUID.fromString(refIdStr))) {
-                        log.info("Skipping RESERVE for {}. Already exists in DB", refIdStr);
+                    if (existingTransactionMap.containsKey(refId)) {
+                        log.info("Skipping RESERVE for {}. Already exists in DB", refId);
+                        continue;
                     }
 
                     Transaction newTransaction = createBaseTransaction(pendingTransaction, TransactionStatus.PENDING);
                     transactionsToSave.add(newTransaction);
-                    sessionTransactions.put(refIdStr, newTransaction);
+                    sessionTransactions.put(refId, newTransaction);
                     handleReserve(pendingTransaction, newTransaction, debitAccount, creditAccount, postingsToSave, balanceChanges, outboxEventsToSave);
                 }
 
@@ -115,8 +116,8 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
     }
 
     public List<UUID> findAlreadyProcessedIds(List<PendingTransaction> batch) {
-        Set<String> refIds = batch.stream()
-                .map(pt -> pt.referenceId().toString())
+        Set<UUID> refIds = batch.stream()
+                .map(PendingTransaction::referenceId)
                 .collect(Collectors.toSet());
 
         return transactionRepository.findAllByReferenceIdIn(refIds).stream()
@@ -154,7 +155,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
     private void handleReserve(PendingTransaction pt, Transaction tx, Account debit, Account credit,
                                List<Posting> posts, Map<UUID, BigDecimal> balances, List<OutboxEvent> events) {
         applyPostings(pt, tx, debit, credit, posts, balances);
-        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "WITHDRAWAL_RESERVED"));
+        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "FUNDS_RESERVED_SUCCESS"));
     }
 
     private void handleSettle(PendingTransaction pt, Transaction tx, Account debit, Account credit,
