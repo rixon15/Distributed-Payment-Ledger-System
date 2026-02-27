@@ -55,7 +55,7 @@ public class WithdrawStrategy extends PaymentStrategy {
     private BankPaymentResponse checkExternalStatus(String paymentId) {
         try {
             return restClient.get()
-                    .uri(bankUrl + "/status/" + paymentId) // Ensure bankUrl is available in base or passed in
+                    .uri(bankUrl + "/status/" + paymentId)
                     .retrieve()
                     .body(BankPaymentResponse.class);
         } catch (Exception e) {
