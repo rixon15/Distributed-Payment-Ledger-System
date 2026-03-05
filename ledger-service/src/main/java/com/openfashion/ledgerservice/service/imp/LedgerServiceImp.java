@@ -65,7 +65,7 @@ public class LedgerServiceImp implements LedgerService {
 
         validateTransactionRequest(request);
 
-        if (transactionRepository.existsByReferenceId(request.getReferenceId().toString())) {
+        if (transactionRepository.existsByReferenceId(request.getReferenceId())) {
             log.warn("Idempotency Triggered: Transaction {} already processed.", request.getReferenceId());
             return;
         }

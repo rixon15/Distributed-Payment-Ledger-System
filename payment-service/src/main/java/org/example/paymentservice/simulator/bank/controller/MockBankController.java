@@ -5,10 +5,7 @@ import org.example.paymentservice.simulator.bank.dto.BankPaymentResponse;
 import org.example.paymentservice.simulator.bank.dto.BankPaymentStatus;
 import org.example.paymentservice.simulator.bank.exceptions.BankErrorException;
 import org.springframework.context.annotation.Profile;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 import java.util.UUID;
@@ -26,8 +23,6 @@ public class MockBankController {
     public BankPaymentResponse simulatePayment(@RequestBody BankPaymentRequest request) throws InterruptedException {
 
         if (idempotencyStore.containsKey(request.referenceId())) {
-            // Optional: You might want to log this to see it happening
-            System.out.println("Mock Bank: Returning cached response for " + request.referenceId());
             return idempotencyStore.get(request.referenceId());
         }
 
@@ -46,11 +41,11 @@ public class MockBankController {
         } else if (roll < 15) {
             throw new BankErrorException();
         } else {
-        response = new BankPaymentResponse(
-                UUID.randomUUID(),
-                BankPaymentStatus.APPROVED,
-                "SUCCESS"
-        );
+            response = new BankPaymentResponse(
+                    UUID.randomUUID(),
+                    BankPaymentStatus.APPROVED,
+                    "SUCCESS"
+            );
         }
 
         idempotencyStore.put(request.referenceId(), response);
@@ -58,5 +53,21 @@ public class MockBankController {
         return response;
     }
 
+    @GetMapping("/status/{referenceId}")
+    public BankPaymentResponse statusCheck(@PathVariable UUID referenceId) {
+        BankPaymentResponse response;
+
+        if (idempotencyStore.containsKey(referenceId)) {
+            response = idempotencyStore.get(referenceId);
+        } else {
+            response = new BankPaymentResponse(
+                    UUID.randomUUID(),
+                    BankPaymentStatus.NOT_FOUND,
+                    "TRANSACTION NOT PROCESSED YET"
+            );
+        }
+
+        return response;
+    }
 
 }

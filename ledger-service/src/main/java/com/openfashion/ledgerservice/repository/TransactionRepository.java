@@ -12,9 +12,9 @@ import java.util.UUID;
 @Repository
 public interface TransactionRepository extends JpaRepository<Transaction, UUID> {
 
-    boolean existsByReferenceId(String referenceId);
+    boolean existsByReferenceId(UUID referenceId);
 
-    Optional<Transaction> findByReferenceId(String referenceId);
+    Optional<Transaction> findByReferenceId(UUID referenceId);
 
-    List<Transaction> findAllByReferenceIdIn(Set<String> refIds);
+    List<Transaction> findAllByReferenceIdIn(Set<UUID> refIds);
 }

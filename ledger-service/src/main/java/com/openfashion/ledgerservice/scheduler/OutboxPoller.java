@@ -47,7 +47,7 @@ public class OutboxPoller {
 
                 log.debug("Successfully published event {} to topic {}", event.getId(), event.getEventType());
 
-            } catch (InterruptedException e) {
+            } catch (InterruptedException _) {
                 Thread.currentThread().interrupt(); // Restore interrupted status
                 log.error("Thread was interrupted while sending event {}", event.getId());
             } catch (ExecutionException | TimeoutException e) {
@@ -61,8 +61,8 @@ public class OutboxPoller {
     private String determineTopic(String eventType) {
         return switch (eventType) {
             case "TRANSACTION_COMPLETED", "WITHDRAWAL_SETTLED" -> TRANSACTION_POSTED_NAME;
-            case "WITHDRAWAL_RESERVED" -> "withdrawal.reserve";
             case "TRANSACTION_FAILED" -> "transaction.failed";
+            case "FUNDS_RESERVED_SUCCESS" -> "ledger.funds.reserved";
             case null, default -> "transaction.unknown";
         };
     }
