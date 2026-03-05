@@ -131,7 +131,7 @@ public abstract class PaymentStrategy {
         }
     }
 
-    protected void reconcileWithBank(Payment payment, BankPaymentResponse bankResult, String bankUrl) {
+    protected void reconcileWithBank(Payment payment, BankPaymentResponse bankResult, String bankUrl, int retryCount) {
         if (bankResult == null) return;
 
         switch (bankResult.status()) {
@@ -143,19 +143,29 @@ public abstract class PaymentStrategy {
                 log.warn("Bank Status DECLINED: Failing payment {}", payment.getId());
                 handleFailure(payment, "Bank Declined", bankResult.reasonCode());
             }
-            case PENDING -> {
-                log.info("Bank Status PENDING: No action taken for {}. Will retry inquiry.", payment.getId());
-            }
+            case PENDING ->
+                    log.info("Bank Status PENDING: No action taken for {}. Will retry inquiry.", payment.getId());
             case NOT_FOUND -> {
+
+                if (retryCount > 3) {
+                    log.error("Max retries reached for payment {}. Bank stuck in NOT_FOUND.", payment.getId());
+                    handleFailure(payment, "Bank Unavailable", "Max retries exceeded");
+                    return;
+                }
+
                 log.info("Bank Status NOT_FOUND: Proceeding with fresh execution for {}", payment.getId());
                 // This is the only state where we actually call the POST /pay endpoint
-                executeNewPayment(payment, bankUrl);
+                executeNewPayment(payment, bankUrl, retryCount + 1);
             }
 
         }
     }
 
-    private void executeNewPayment(Payment payment, String bankUrl) {
+    protected void reconcileWithBank(Payment payment, BankPaymentResponse bankResult, String bankUrl) {
+        reconcileWithBank(payment, bankResult, bankUrl, 0);
+    }
+
+    private void executeNewPayment(Payment payment, String bankUrl, int retryCount) {
         BankPaymentRequest bankRequest = new BankPaymentRequest(
                 payment.getId(),
                 "EXT-ACCT-" + payment.getUserId(),
@@ -171,8 +181,8 @@ public abstract class PaymentStrategy {
                     .body(BankPaymentResponse.class);
 
             // After the POST, we use the same reconciliation logic
-            reconcileWithBank(payment, response, bankUrl);
-        } catch (Exception e) {
+            reconcileWithBank(payment, response, bankUrl, retryCount);
+        } catch (Exception _) {
             log.error("POST /pay failed for payment {}. Recovery scheduler will inquire status later.", payment.getId());
         }
     }

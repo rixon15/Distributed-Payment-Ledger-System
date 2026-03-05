@@ -173,7 +173,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
                                List<Posting> posts, Map<UUID, BigDecimal> balances, List<OutboxEvent> events) {
         if (tx == null) return;
         tx.setStatus(TransactionStatus.FAILED);
-        tx.setMetadata("Released by system");
+        tx.setMetadata("{\"reason\": \"Released by system\"}");
         applyPostings(pt, tx, debit, credit, posts, balances);
         events.add(createOutboxEvent(pt, pt.referenceId().toString(), "TRANSACTION_FAILED"));
     }

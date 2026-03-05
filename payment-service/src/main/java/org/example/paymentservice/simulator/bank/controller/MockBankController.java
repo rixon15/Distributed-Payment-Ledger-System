@@ -23,8 +23,6 @@ public class MockBankController {
     public BankPaymentResponse simulatePayment(@RequestBody BankPaymentRequest request) throws InterruptedException {
 
         if (idempotencyStore.containsKey(request.referenceId())) {
-            // Optional: You might want to log this to see it happening
-            System.out.println("Mock Bank: Returning cached response for " + request.referenceId());
             return idempotencyStore.get(request.referenceId());
         }
 
@@ -60,11 +58,7 @@ public class MockBankController {
         BankPaymentResponse response;
 
         if (idempotencyStore.containsKey(referenceId)) {
-            response = new BankPaymentResponse(
-                    UUID.randomUUID(),
-                    BankPaymentStatus.APPROVED,
-                    "TRANSACTION ALREADY PROCESSED"
-            );
+            response = idempotencyStore.get(referenceId);
         } else {
             response = new BankPaymentResponse(
                     UUID.randomUUID(),

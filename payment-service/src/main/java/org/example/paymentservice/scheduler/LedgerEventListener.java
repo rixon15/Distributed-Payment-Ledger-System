@@ -24,20 +24,35 @@ public class LedgerEventListener {
     @KafkaListener(topics = "ledger.funds.reserved", groupId = "payment-group")
     public void onFundsReserved(String message) {
         try {
-            // 1. Parse the incoming Ledger event
             JsonNode payload = objectMapper.readTree(message);
-            UUID paymentId = UUID.fromString(payload.get("aggregateId").asText());
 
-            // 2. Fetch the Payment
+            if (payload.isTextual()) {
+                payload = objectMapper.readTree(payload.asText());
+            }
+
+            // 1. SAFELY EXTRACT THE RAW STRING (NO QUOTES)
+            String refIdStr = payload.path("referenceId").asText(null);
+
+            // 2. CHECK IF IT WAS MISSING
+            if (refIdStr == null || refIdStr.isBlank()) {
+                log.warn("Discarding invalid message: missing 'referenceId'. Payload: {}", message);
+                return; // Discard and acknowledge so Kafka moves on
+            }
+
+            // 3. PARSE THE CLEAN UUID
+            UUID paymentId = UUID.fromString(refIdStr);
+
             Payment payment = paymentRepository.findById(paymentId)
-                    .orElseThrow(() -> new RuntimeException("Payment not found: " + paymentId));
+                    .orElseThrow(() -> new RuntimeException("Payment not found in DB: " + paymentId));
 
-            // 3. Trigger the actual Bank API call now that funds are safe!
             log.info("Ledger confirmed reservation. Calling bank for payment: {}", paymentId);
-            withdrawStrategy.callBankApi(payment); // You might need to expose callBankApi in your strategy
+            withdrawStrategy.reconcilePaymentWithBank(payment);
 
+        } catch (IllegalArgumentException _) {
+            log.error("Discarding message with invalid UUID format. Payload: {}", message);
         } catch (Exception e) {
-            log.error("Failed to process ledger reservation confirmation", e);
+            log.error("System error processing reservation confirmation", e);
+            throw new RuntimeException("Failed to process ledger reservation confirmation", e);
         }
     }
 }

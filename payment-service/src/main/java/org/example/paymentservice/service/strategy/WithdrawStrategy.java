@@ -37,19 +37,21 @@ public class WithdrawStrategy extends PaymentStrategy {
     @Override
     public void execute(Payment payment, PaymentRequest request) {
         finalizeStatus(payment, PaymentStatus.PENDING, null);
-
-        CompletableFuture.runAsync(() -> callBankApi(payment));
     }
 
-    public void callBankApi(Payment payment) {
+    private void callBankApi(Payment payment) {
 
-       try {
-           BankPaymentResponse existingStatus = checkExternalStatus(payment.getId().toString());
+        try {
+            BankPaymentResponse existingStatus = checkExternalStatus(payment.getId().toString());
 
-           reconcileWithBank(payment, existingStatus, bankUrl);
-       } catch (Exception e) {
-           log.error("Reconciliation inquiry failed for payment {}. Retrying later.", payment.getId(), e);
-       }
+            reconcileWithBank(payment, existingStatus, bankUrl);
+        } catch (Exception e) {
+            log.error("Reconciliation inquiry failed for payment {}. Retrying later.", payment.getId(), e);
+        }
+    }
+
+    public void reconcilePaymentWithBank(Payment payment) {
+        callBankApi(payment);
     }
 
     private BankPaymentResponse checkExternalStatus(String paymentId) {
