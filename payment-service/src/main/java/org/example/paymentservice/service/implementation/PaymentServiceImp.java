@@ -196,6 +196,7 @@ public class PaymentServiceImp implements PaymentService {
 
         paymentRepository.save(payment);
 
+        //TODO: implement a way to handle the payments manually
         outboxRepository.save(
                 OutboxEvent.builder()
                         .aggregateId(payment.getId().toString())

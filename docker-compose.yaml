@@ -8,6 +8,7 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+    command: ["postgres", "-c", "wal_level=logical"]
     volumes:
       - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
       - postgres_data:/var/lib/postgresql/data
@@ -60,6 +61,98 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     networks:
       - payment-network
+
+  debezium:
+    image: quay.io/debezium/connect:2.5.0.Final
+    container_name: payment_debezium
+    ports:
+      - "8083:8083"
+    environment:
+      - BOOTSTRAP_SERVERS=kafka:29092
+      - GROUP_ID=1
+      - CONFIG_STORAGE_TOPIC=my_connect_configs
+      - OFFSET_STORAGE_TOPIC=my_connect_offsets
+      - STATUS_STORAGE_TOPIC=my_connect_statuses
+    depends_on:
+      - kafka
+      - postgres
+    networks:
+      - payment-network
+
+  debezium-setup:
+    image: curlimages/curl:latest
+    container_name: debezium_setup
+    depends_on:
+      - debezium
+    networks:
+      - payment-network
+    command: >
+      sh -c "
+        echo 'Waiting for Debezium...'
+        while ! curl -s http://debezium:8083/connectors > /dev/null; do sleep 2; done;
+      
+        echo 'Registering Payment Connector...'
+        curl -i -X POST -H 'Accept:application/json' -H 'Content-Type:application/json' http://debezium:8083/connectors/ -d '{
+          \"name\": \"payment-outbox-connector\",
+          \"config\": {
+            \"connector.class\": \"io.debezium.connector.postgresql.PostgresConnector\",
+            \"tasks.max\": \"1\",
+            \"database.hostname\": \"postgres\",
+            \"database.port\": \"5432\",
+            \"database.user\": \"user\",
+            \"database.password\": \"password\",
+            \"database.dbname\": \"payment_db\",
+            \"topic.prefix\": \"payment-server\",
+            \"plugin.name\": \"pgoutput\",
+            \"table.include.list\": \"public.outbox_events\",
+            \"tombstones.on.delete\": \"false\",
+            \"key.converter\": \"org.apache.kafka.connect.json.JsonConverter\",
+            \"key.converter.schemas.enable\": \"false\",
+            \"value.converter\": \"org.apache.kafka.connect.json.JsonConverter\",
+            \"value.converter.schemas.enable\": \"false\",
+            \"transforms\": \"outbox\",
+            \"transforms.outbox.type\": \"io.debezium.transforms.outbox.EventRouter\",
+            \"transforms.outbox.table.field.event.id\": \"id\",
+            \"transforms.outbox.table.field.event.key\": \"aggregate_id\",
+            \"transforms.outbox.table.field.event.type\": \"event_type\",
+            \"transforms.outbox.table.field.event.payload\": \"payload\",
+            \"transforms.outbox.route.by.field\": \"event_type\",
+            \"transforms.outbox.route.topic.replacement\": \"$${routedByValue}\",
+            \"transforms.outbox.table.expand.json.payload\": \"true\"
+          }
+        }'
+      
+        echo 'Registering Ledger Connector...'
+        curl -i -X POST -H 'Accept:application/json' -H 'Content-Type:application/json' http://debezium:8083/connectors/ -d '{
+          \"name\": \"ledger-outbox-connector\",
+          \"config\": {
+            \"connector.class\": \"io.debezium.connector.postgresql.PostgresConnector\",
+            \"tasks.max\": \"1\",
+            \"database.hostname\": \"postgres\",
+            \"database.port\": \"5432\",
+            \"database.user\": \"user\",
+            \"database.password\": \"password\",
+            \"database.dbname\": \"ledger_db\",
+            \"topic.prefix\": \"ledger-server\",
+            \"plugin.name\": \"pgoutput\",
+            \"table.include.list\": \"public.outbox_events\",
+            \"tombstones.on.delete\": \"false\",
+            \"key.converter\": \"org.apache.kafka.connect.json.JsonConverter\",
+            \"key.converter.schemas.enable\": \"false\",
+            \"value.converter\": \"org.apache.kafka.connect.json.JsonConverter\",
+            \"value.converter.schemas.enable\": \"false\",
+            \"transforms\": \"outbox\",
+            \"transforms.outbox.type\": \"io.debezium.transforms.outbox.EventRouter\",
+            \"transforms.outbox.table.field.event.id\": \"id\",
+            \"transforms.outbox.table.field.event.key\": \"aggregate_id\",
+            \"transforms.outbox.table.field.event.type\": \"event_type\",
+            \"transforms.outbox.table.field.event.payload\": \"payload\",
+            \"transforms.outbox.route.by.field\": \"event_type\",
+            \"transforms.outbox.route.topic.replacement\": \"$${routedByValue}\",
+            \"transforms.outbox.table.expand.json.payload\": \"true\"
+          }
+        }'
+      "
 
 volumes:
   postgres_data:

@@ -40,7 +40,6 @@ public class LedgerServiceImp implements LedgerService {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final OutboxRepository outboxRepository;
     private final RedisService redisService;
-    private static final String FAILED_TRANSACTION = "TRANSACTION_FAILED";
     private static final String WITHDRAWAL_ACCOUNT_NAME = "PENDING_WITHDRAWAL";
     private static final String WORLD_ACCOUNT_NAME = "WORLD_LIQUIDITY";
 
@@ -105,9 +104,9 @@ public class LedgerServiceImp implements LedgerService {
         log.info("Processing {} for reference: {}", event.status(), event.referenceId());
 
         switch (event.status()) {
-            case RESERVED -> bufferReservation(event);
-            case CONFIRMED -> bufferSettlement(event);
-            case FAILED -> bufferRelease(event);
+            case RESERVE -> bufferReservation(event);
+            case COMPLETE -> bufferSettlement(event);
+            case RELEASE -> bufferRelease(event);
         }
     }
 
@@ -162,7 +161,7 @@ public class LedgerServiceImp implements LedgerService {
 
         transactionRepository.save(transaction);
 
-        saveOutboxEvent(transaction, FAILED_TRANSACTION);
+        saveOutboxEvent(transaction, "transaction.failed");
     }
 
     private void bufferReservation(WithdrawalEvent event) {

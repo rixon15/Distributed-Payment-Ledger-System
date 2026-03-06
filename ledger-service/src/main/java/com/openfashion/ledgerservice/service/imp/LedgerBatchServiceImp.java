@@ -140,7 +140,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
                 .build();
 
         transactionRepository.save(failedTx);
-        outboxRepository.save(createOutboxEvent(failedTx, failedTx.getReferenceId().toString(), "TRANSACTION_FAILED"));
+        outboxRepository.save(createOutboxEvent(failedTx, failedTx.getReferenceId().toString(), "transaction.failed"));
     }
 
     private OutboxEvent createOutboxEvent(Object payload, String referenceId, String type) {
@@ -155,7 +155,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
     private void handleReserve(PendingTransaction pt, Transaction tx, Account debit, Account credit,
                                List<Posting> posts, Map<UUID, BigDecimal> balances, List<OutboxEvent> events) {
         applyPostings(pt, tx, debit, credit, posts, balances);
-        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "FUNDS_RESERVED_SUCCESS"));
+        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "ledger.funds.reserved"));
     }
 
     private void handleSettle(PendingTransaction pt, Transaction tx, Account debit, Account credit,
@@ -166,7 +166,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         }
         tx.setStatus(TransactionStatus.POSTED);
         applyPostings(pt, tx, debit, credit, posts, balances);
-        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "WITHDRAWAL_SETTLED"));
+        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "transaction.posted"));
     }
 
     private void handleRelease(PendingTransaction pt, Transaction tx, Account debit, Account credit,
@@ -175,13 +175,13 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         tx.setStatus(TransactionStatus.FAILED);
         tx.setMetadata("{\"reason\": \"Released by system\"}");
         applyPostings(pt, tx, debit, credit, posts, balances);
-        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "TRANSACTION_FAILED"));
+        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "transaction.failed"));
     }
 
     private void handleStandard(PendingTransaction pt, Transaction tx, Account debit, Account credit,
                                 List<Posting> posts, Map<UUID, BigDecimal> balances, List<OutboxEvent> events) {
         applyPostings(pt, tx, debit, credit, posts, balances);
-        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "TRANSACTION_COMPLETED"));
+        events.add(createOutboxEvent(pt, pt.referenceId().toString(), "transaction.posted"));
     }
 
     private void applyPostings(PendingTransaction pt, Transaction tx, Account debit, Account credit, List<Posting> posts,

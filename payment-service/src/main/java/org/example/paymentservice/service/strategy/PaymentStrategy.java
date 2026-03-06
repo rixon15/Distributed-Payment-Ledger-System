@@ -59,7 +59,7 @@ public abstract class PaymentStrategy {
                     .aggregateId(payment.getId().toString())
                     .eventType(eventType)
                     .payload(jsonPayload)
-                    .status(OutboxStatus.PENDING)
+                    .status(OutboxStatus.PROCESSED)
                     .createdAt(Instant.now())
                     .build();
 
@@ -72,7 +72,7 @@ public abstract class PaymentStrategy {
     protected void handleFailure(Payment payment, String internalReason, String userMessage) {
         log.warn("Payment {} failed: {}", payment.getId(), internalReason);
 
-        tx.executeWithoutResult(status -> {
+        tx.executeWithoutResult(_ -> {
             payment.setStatus(PaymentStatus.FAILED);
             payment.setErrorMessage(internalReason);
             paymentRepository.save(payment);
@@ -80,13 +80,13 @@ public abstract class PaymentStrategy {
             saveOutboxEvent(payment, "TRANSACTION_FAILED", userMessage);
 
             if (payment.getType() == TransactionType.WITHDRAWAL) {
-                emitWithdrawalEvent(payment, WithdrawalStatus.FAILED);
+                emitWithdrawalEvent(payment, WithdrawalStatus.RELEASE);
             }
         });
     }
 
     protected void finalizeStatus(Payment payment, PaymentStatus status, UUID externalId) {
-        tx.executeWithoutResult(ts -> {
+        tx.executeWithoutResult(_ -> {
             payment.setStatus(status);
             payment.setExternalTransactionId(externalId != null ? externalId.toString() : null);
             paymentRepository.save(payment);
@@ -94,9 +94,9 @@ public abstract class PaymentStrategy {
             // Map PaymentStatus to Ledger's WithdrawalStatus
             if (payment.getType() == TransactionType.WITHDRAWAL) {
                 WithdrawalStatus ledgerStatus = switch (status) {
-                    case PENDING -> WithdrawalStatus.RESERVED;
-                    case AUTHORIZED -> WithdrawalStatus.CONFIRMED;
-                    case FAILED -> WithdrawalStatus.FAILED;
+                    case PENDING -> WithdrawalStatus.RESERVE;
+                    case AUTHORIZED -> WithdrawalStatus.COMPLETE;
+                    case FAILED -> WithdrawalStatus.RELEASE;
                     default -> null;
                 };
 
@@ -104,7 +104,7 @@ public abstract class PaymentStrategy {
                     emitWithdrawalEvent(payment, ledgerStatus);
                 }
             } else {
-                saveOutboxEvent(payment, "TRANSACTION_INITIATED", null);
+                saveOutboxEvent(payment, "transaction.initiated", null);
             }
         });
     }
@@ -119,11 +119,11 @@ public abstract class PaymentStrategy {
         );
 
         try {
-            outboxRepository.save(OutboxEvent.builder()
+             outboxRepository.save(OutboxEvent.builder()
                     .aggregateId(payment.getId().toString())
-                    .eventType("WITHDRAWAL_" + status.name())
+                    .eventType("withdrawal." + status.name().toLowerCase())
                     .payload(objectMapper.writeValueAsString(event))
-                    .status(OutboxStatus.PENDING)
+                    .status(OutboxStatus.PROCESSED)
                     .createdAt(Instant.now())
                     .build());
         } catch (Exception e) {
