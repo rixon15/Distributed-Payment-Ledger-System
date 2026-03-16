@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
-    command: ["postgres", "-c", "wal_level=logical"]
+    command: [ "postgres", "-c", "wal_level=logical" ]
     volumes:
       - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
       - postgres_data:/var/lib/postgresql/data
@@ -98,9 +98,9 @@ services:
             \"connector.class\": \"io.debezium.connector.postgresql.PostgresConnector\",
             \"tasks.max\": \"1\",
             \"database.hostname\": \"postgres\",
-            \"database.port\": \"5432\",
-            \"database.user\": \"user\",
-            \"database.password\": \"password\",
+            \"database.port\": \"${POSTGRES_HOST_PORT}\",
+            \"database.user\": \"${POSTGRES_USER}\",
+            \"database.password\": \"${POSTGRES_PASSWORD}\",
             \"database.dbname\": \"payment_db\",
             \"topic.prefix\": \"payment-server\",
             \"plugin.name\": \"pgoutput\",
@@ -129,9 +129,9 @@ services:
             \"connector.class\": \"io.debezium.connector.postgresql.PostgresConnector\",
             \"tasks.max\": \"1\",
             \"database.hostname\": \"postgres\",
-            \"database.port\": \"5432\",
-            \"database.user\": \"user\",
-            \"database.password\": \"password\",
+            \"database.port\": \"${POSTGRES_HOST_PORT}\",
+            \"database.user\": \"${POSTGRES_USER}\",
+            \"database.password\": \"${POSTGRES_PASSWORD}\",
             \"database.dbname\": \"ledger_db\",
             \"topic.prefix\": \"ledger-server\",
             \"plugin.name\": \"pgoutput\",
