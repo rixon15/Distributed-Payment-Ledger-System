@@ -14,7 +14,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 @Component
@@ -31,24 +30,27 @@ public class TransactionEventListener {
         parallelConsumer.subscribe(List.of("transaction.initiated"));
 
         parallelConsumer.poll(context -> {
-
+            // In version 0.5.x, .stream() provides the records in the batch
+            // when .batchSize() is set in the options.
             List<TransactionRequest> batch = context.stream()
-                    .map(r -> mapEventToRequest(r.value()))
+                    .map(recordContext -> {
+                        // Access the value directly from the RecordContext
+                        TransactionRequest req = mapEventToRequest(recordContext.value());
+                        ledgerService.resolveAccounts(req);
+                        return req;
+                    })
                     .toList();
 
-            try {
-                redisService.processBatchAtomic(batch);
+            if (batch.isEmpty()) return;
 
-                boolean dbCommitted = redisService.waitForPersistence(batch, Duration.ofSeconds(10));
+            log.info("Processing Kafka batch of size: {}", batch.size());
 
-                if(!dbCommitted) {
-                    throw new RuntimeException("Db commit timeout - retrying batch");
-                }
+            redisService.processBatchAtomic(batch);
 
-                log.info("Batch fully ACKed after DB commit for account: {}", context.getSingleRecord().key());
-            } catch (Exception e) {
-                log.error("Flow failed, Kafka will redeliver: {}", e.getMessage());
-                throw e;
+            // High-load timeout (30s)
+            boolean success = redisService.waitForPersistence(batch, Duration.ofSeconds(30));
+            if (!success) {
+                throw new RuntimeException("Db commit timeout - retrying batch");
             }
         });
     }

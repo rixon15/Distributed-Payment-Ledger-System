@@ -5,7 +5,9 @@ import com.openfashion.ledgerservice.dto.event.WithdrawalEvent;
 
 public interface LedgerService {
 
-    void processTransaction(TransactionRequest request);
+   // void processTransaction(TransactionRequest request);
 
     void handleWithdrawalEvent(WithdrawalEvent event);
+
+    void resolveAccounts(TransactionRequest request);
 }

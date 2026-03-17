@@ -2,6 +2,7 @@ package com.openfashion.ledgerservice.service;
 
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.redis.PendingTransaction;
+import com.openfashion.ledgerservice.model.Account;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -23,4 +24,6 @@ public interface RedisService {
     void signalConfirmation(List<TransactionRequest> batch);
 
     List<TransactionRequest> popFromQueue(int batchSize);
+
+    void initializeSnapshotIfMissing(Account account);
 }

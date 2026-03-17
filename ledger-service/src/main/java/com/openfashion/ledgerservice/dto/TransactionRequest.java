@@ -25,4 +25,6 @@ public class TransactionRequest {
     private CurrencyType currency;
     private String metadata;
 
+    private UUID debitAccountId;
+    private UUID creditAccountId;
 }

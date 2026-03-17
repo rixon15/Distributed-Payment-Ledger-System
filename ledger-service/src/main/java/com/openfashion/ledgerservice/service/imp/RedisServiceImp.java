@@ -1,8 +1,10 @@
 package com.openfashion.ledgerservice.service.imp;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.openfashion.ledgerservice.core.exceptions.InsufficientFundsException;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.redis.PendingTransaction;
+import com.openfashion.ledgerservice.model.Account;
 import com.openfashion.ledgerservice.service.RedisService;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -55,27 +57,31 @@ public class RedisServiceImp implements RedisService {
             -- KEYS[4]: ledger:queue (Postgres buffer)
             
             -- ARGV[1]: referenceId
-            -- ARGV[2]: senderId
-            -- ARGV[3]: amount (e.g., 100.00)
-            -- ARGV[4]: receiverId
+            -- ARGV[2]: debitAccountId
+            -- ARGV[3]: amount
+            -- ARGV[4]: creditAccountId
             -- ARGV[5]: serializedTransaction (JSON)
+            -- ARGV[6]: checkNsfFlag ('1' to check, '0' to bypass)
             
             -- 1. Idempotency Check
             if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 1 then
                 return 'DUPLICATE'
             end
             
-            -- 2. Balance Validation (Sender)
-            local db_bal = tonumber(redis.call('HGET', KEYS[2], ARGV[2]) or '0')
-            local pending_delta = tonumber(redis.call('HGET', KEYS[3], ARGV[2]) or '0')
-            local soft_bal = db_bal + pending_delta
-            local amount = tonumber(ARGV[3])
+            -- 2. Balance Validation (Only if flag is '1')
+            if ARGV[6] == '1' then
+                local db_bal = tonumber(redis.call('HGET', KEYS[2], ARGV[2]) or '0')
+                local pending_delta = tonumber(redis.call('HGET', KEYS[3], ARGV[2]) or '0')
+                local soft_bal = db_bal + pending_delta
+                local amount = tonumber(ARGV[3])
             
-            if (soft_bal - amount) < 0 then
-                return 'NSF'
+                if (soft_bal - amount) < 0 then
+                    return 'NSF'
+                end
             end
             
             -- 3. Execute Movement
+            local amount = tonumber(ARGV[3])
             -- Debit Sender
             redis.call('HINCRBYFLOAT', KEYS[3], ARGV[2], -amount)
             -- Credit Receiver
@@ -90,6 +96,9 @@ public class RedisServiceImp implements RedisService {
 
     private String LEDGER_SCRIPT_SHA;
     private String POP_BATCH_LUA_SHA;
+
+    private static final RedisScript<String> LEDGER_SPRING_SCRIPT =
+            new DefaultRedisScript<>(LEDGER_SCRIPT, String.class);
 
     @PostConstruct
     public void loadScript() {
@@ -107,31 +116,49 @@ public class RedisServiceImp implements RedisService {
 
     @Override
     public void processBatchAtomic(List<TransactionRequest> batch) {
-        balanceTemplate.executePipelined((RedisCallback<Object>) connection -> {
-            for (TransactionRequest request : batch) {
-                connection.scriptingCommands().eval(
-                        LEDGER_SCRIPT_SHA.getBytes(),
-                        ReturnType.STATUS,
-                        4,
-                        IDEMPOTENCY_KEY.getBytes(),
-                        DB_SNAPSHOT_KEY.getBytes(),
-                        PENDING_DELTA_KEY.getBytes(),
-                        QUEUE_KEY.getBytes(),
-                        request.getReferenceId().toString().getBytes(),
-                        request.getSenderId().toString().getBytes(),
-                        request.getAmount().toString().getBytes(),
-                        request.getReceiverId().toString().getBytes(),
-                        serialize(request).getBytes()
-                );
+        // 1. Run Pipeline
+        List<Object> results = balanceTemplate.executePipelined(new org.springframework.data.redis.core.SessionCallback<Object>() {
+            @Override
+            public Object execute(org.springframework.data.redis.core.RedisOperations operations) throws org.springframework.dao.DataAccessException {
+                for (TransactionRequest request : batch) {
+
+                    boolean checkNsf = switch (request.getType()) {
+                        case DEPOSIT, WITHDRAWAL_SETTLE, WITHDRAWAL_RELEASE -> false;
+                        default -> true;
+                    };
+
+                    String checkNsfStr = checkNsf ? "1" : "0";
+
+                    operations.execute(
+                            LEDGER_SPRING_SCRIPT,
+                            List.of(IDEMPOTENCY_KEY, DB_SNAPSHOT_KEY, PENDING_DELTA_KEY, QUEUE_KEY),
+                            request.getReferenceId().toString(),
+                            request.getDebitAccountId().toString(),
+                            request.getAmount().toPlainString(),
+                            request.getCreditAccountId().toString(),
+                            serialize(request),
+                            checkNsfStr
+                    );
+                }
+                return null;
             }
-
-            connection.execute(
-                    "WAIT",
-                    "1".getBytes(StandardCharsets.UTF_8),
-                    "100".getBytes(StandardCharsets.UTF_8));
-
-            return null;
         });
+
+        //TODO: wait command for other replicas
+
+        // 2. Process results (No WAIT command needed for local single-node!)
+        for (int i = 0; i < batch.size(); i++) {
+            String resultStr = (String) results.get(i);
+            handleScriptResult(resultStr, batch.get(i));
+        }
+    }
+
+    public void initializeSnapshotIfMissing(Account account) {
+        balanceTemplate.opsForHash().putIfAbsent(
+                DB_SNAPSHOT_KEY,
+                account.getId().toString(),
+                account.getBalance().toPlainString()
+        );
     }
 
     @Override
@@ -174,9 +201,24 @@ public class RedisServiceImp implements RedisService {
         });
     }
 
+    private void handleScriptResult(String result, TransactionRequest request) {
+        switch (result) {
+            case "OK":
+            case "DUPLICATE":
+                // If it's a duplicate, Redis already processed it previously,
+                // but we still let it pass here so the listener waits for the DB to confirm it.
+                break;
+            case "NSF":
+                log.warn("Insufficient funds for transaction {}", request.getReferenceId());
+                throw new InsufficientFundsException(request.getSenderId());
+            default:
+                throw new RuntimeException("Unexpected Redis response: " + result);
+        }
+    }
+
     private boolean allConfirmed(List<TransactionRequest> batch) {
         List<String> confirmationKeys = batch.stream()
-                .map(req -> "confirmed: " + req.getReferenceId())
+                .map(req -> "confirmed:" + req.getReferenceId())
                 .toList();
 
         List<String> results = balanceTemplate.opsForValue().multiGet(confirmationKeys);
@@ -196,22 +238,28 @@ public class RedisServiceImp implements RedisService {
 
     @Override
     public List<TransactionRequest> popFromQueue(int batchSize) {
-        List<String> rawItems = balanceTemplate.execute(
-                new DefaultRedisScript<>(POP_BATCH_LUA_SHA, List.class),
-                List.of(QUEUE_KEY, PROCESSING_KEY),
-                String.valueOf(batchSize)
-        );
+        List<byte[]> rawItems = balanceTemplate.execute((RedisCallback<List<byte[]>>) connection -> {
+            return connection.scriptingCommands().evalSha(
+                    POP_BATCH_LUA_SHA.getBytes(StandardCharsets.UTF_8),
+                    ReturnType.MULTI,
+                    2, // Number of keys
+                    QUEUE_KEY.getBytes(StandardCharsets.UTF_8),
+                    PROCESSING_KEY.getBytes(StandardCharsets.UTF_8),
+                    String.valueOf(batchSize).getBytes(StandardCharsets.UTF_8)
+            );
+        });
 
         if (rawItems == null || rawItems.isEmpty()) {
             return List.of();
         }
 
         return rawItems.stream()
-                .map(json -> {
+                .map(bytes -> {
                     try {
+                        String json = new String(bytes, StandardCharsets.UTF_8);
                         return objectMapper.readValue(json, TransactionRequest.class);
                     } catch (Exception e) {
-                        log.error("CRITICAL: Failed to deserialize transaction in queue. Payload: {}", json, e);
+                        log.error("CRITICAL: Failed to deserialize transaction in queue. Payload: {}", e);
                         return null;
                     }
                 })

@@ -8,8 +8,6 @@ import org.apache.kafka.clients.consumer.Consumer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.concurrent.ExecutorService;
-
 @Configuration
 @RequiredArgsConstructor
 public class ParallelConsumerConfig {
@@ -20,9 +18,9 @@ public class ParallelConsumerConfig {
     ) {
         var options = ParallelConsumerOptions.<String, TransactionInitiatedEvent>builder()
                 .ordering(ParallelConsumerOptions.ProcessingOrder.KEY)
-                .maxConcurrency(2000)
+                .maxConcurrency(100)
                 .consumer(nativeConsumer)
-                .batchSize(50)
+                .batchSize(150)
                 .commitMode(ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC)
                 .build();
 
