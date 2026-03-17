@@ -2,6 +2,7 @@ package com.openfashion.ledgerservice.core.config;
 
 import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
 import com.openfashion.ledgerservice.dto.event.WithdrawalEvent;
+import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -94,5 +95,12 @@ public class KafkaConfig {
     @Bean
     public KafkaTemplate<String, Object> kafkaTemplate() {
         return new KafkaTemplate<>(producerFactory());
+    }
+
+    @Bean
+    public Consumer<String, TransactionInitiatedEvent> nativeConsumer(
+            ConsumerFactory<String, TransactionInitiatedEvent> initiatedEventConsumerFactory
+    ) {
+        return initiatedEventConsumerFactory.createConsumer();
     }
 }

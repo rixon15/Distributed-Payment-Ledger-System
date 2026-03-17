@@ -56,7 +56,7 @@ public abstract class PaymentStrategy {
             String jsonPayload = objectMapper.writeValueAsString(eventPayload);
 
             OutboxEvent outbox = OutboxEvent.builder()
-                    .aggregateId(payment.getId().toString())
+                    .aggregateId(payment.getUserId().toString())
                     .eventType(eventType)
                     .payload(jsonPayload)
                     .status(OutboxStatus.PROCESSED)
@@ -120,7 +120,7 @@ public abstract class PaymentStrategy {
 
         try {
              outboxRepository.save(OutboxEvent.builder()
-                    .aggregateId(payment.getId().toString())
+                    .aggregateId(payment.getUserId().toString())
                     .eventType("withdrawal." + status.name().toLowerCase())
                     .payload(objectMapper.writeValueAsString(event))
                     .status(OutboxStatus.PROCESSED)

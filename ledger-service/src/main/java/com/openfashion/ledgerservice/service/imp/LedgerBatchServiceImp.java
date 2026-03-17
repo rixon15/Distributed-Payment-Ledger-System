@@ -1,5 +1,6 @@
 package com.openfashion.ledgerservice.service.imp;
 
+import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.redis.PendingTransaction;
 import com.openfashion.ledgerservice.model.*;
 import com.openfashion.ledgerservice.repository.AccountRepository;
@@ -10,6 +11,7 @@ import com.openfashion.ledgerservice.service.LedgerBatchService;
 import com.openfashion.ledgerservice.service.RedisService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
@@ -31,6 +33,14 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
     private final PostingRepository postingRepository;
     private final OutboxRepository outboxRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Scheduled(fixedDelay = 500)
+    public void processQueue() {
+        List<TransactionRequest> dbBatch = redisService.popFromQueue(100);
+        if(dbBatch.isEmpty()) return;
+
+
+    }
 
     @Transactional
     public void processBatch(List<PendingTransaction> batch) {

@@ -6,13 +6,16 @@ import com.openfashion.ledgerservice.dto.event.TransactionPayload;
 import com.openfashion.ledgerservice.model.CurrencyType;
 import com.openfashion.ledgerservice.model.TransactionType;
 import com.openfashion.ledgerservice.service.LedgerService;
+import com.openfashion.ledgerservice.service.RedisService;
+import io.confluent.parallelconsumer.ParallelStreamProcessor;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.kafka.annotation.KafkaListener;
-import org.springframework.kafka.annotation.RetryableTopic;
-import org.springframework.kafka.annotation.BackOff;
-import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
+
+import java.time.Duration;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
 
 @Component
 @Slf4j
@@ -20,32 +23,61 @@ import org.springframework.stereotype.Component;
 public class TransactionEventListener {
 
     private final LedgerService ledgerService;
+    private final ParallelStreamProcessor<String, TransactionInitiatedEvent> parallelConsumer;
+    private final RedisService redisService;
 
-    @RetryableTopic(
-            attempts = "5",
-            backOff = @BackOff(delay = 1000, multiplier = 2.0),
-            kafkaTemplate = "kafkaTemplate"
+    @PostConstruct
+    public void startConsuming() {
+        parallelConsumer.subscribe(List.of("transaction.initiated"));
 
-    )
-    @KafkaListener(
-            topics = "transaction.initiated",
-            groupId = "${spring.kafka.consumer.group-id}",
-            containerFactory = "initiatedKafkaListenerContainerFactory"
-    )
-    public void handleTransactionInitiated(TransactionInitiatedEvent event, Acknowledgment acknowledgment) {
-        log.info("Received transaction event: {} type: {}", event.eventId(), event.payload().type());
+        parallelConsumer.poll(context -> {
 
-        try {
-            TransactionRequest request = mapEventToRequest(event);
+            List<TransactionRequest> batch = context.stream()
+                    .map(r -> mapEventToRequest(r.value()))
+                    .toList();
 
-            ledgerService.processTransaction(request);
+            try {
+                redisService.processBatchAtomic(batch);
 
-            acknowledgment.acknowledge();
-        } catch (Exception e) {
-            log.error("Error processing transaction event: {}", event.referenceId(), e);
-            //TODO: Create wrapper around the event to keep count of retry and if retry > 3 move to DLQ
-        }
+                boolean dbCommitted = redisService.waitForPersistence(batch, Duration.ofSeconds(10));
+
+                if(!dbCommitted) {
+                    throw new RuntimeException("Db commit timeout - retrying batch");
+                }
+
+                log.info("Batch fully ACKed after DB commit for account: {}", context.getSingleRecord().key());
+            } catch (Exception e) {
+                log.error("Flow failed, Kafka will redeliver: {}", e.getMessage());
+                throw e;
+            }
+        });
     }
+
+//    @RetryableTopic(
+//            attempts = "5",
+//            backOff = @BackOff(delay = 1000, multiplier = 2.0),
+//            kafkaTemplate = "kafkaTemplate"
+//
+//    )
+//    @KafkaListener(
+//            topics = "transaction.initiated",
+//            groupId = "${spring.kafka.consumer.group-id}",
+//            containerFactory = "initiatedKafkaListenerContainerFactory"
+//    )
+//    public void handleTransactionInitiated(TransactionInitiatedEvent event, Acknowledgment acknowledgment) {
+//        log.info("Received transaction event: {} type: {}", event.eventId(), event.payload().type());
+//
+//        try {
+//            TransactionRequest request = mapEventToRequest(event);
+//
+//            ledgerService.processTransaction(request);
+//
+//            acknowledgment.acknowledge();
+//        } catch (Exception e) {
+//            log.error("Error processing transaction event: {}", event.referenceId(), e);
+//            //TODO: Create wrapper around the event to keep count of retry and if retry > 3 move to DLQ
+//        }
+//    }
 
     private TransactionRequest mapEventToRequest(TransactionInitiatedEvent event) {
         TransactionRequest request = new TransactionRequest();

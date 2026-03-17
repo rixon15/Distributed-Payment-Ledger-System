@@ -1,8 +1,10 @@
 package com.openfashion.ledgerservice.service;
 
+import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.redis.PendingTransaction;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
@@ -13,4 +15,8 @@ public interface RedisService {
     BigDecimal getPendingNetChanges(UUID accountId);
 
     void commitFromBuffer(List<PendingTransaction> transactions);
+
+    void processBatchAtomic(List<TransactionRequest> batch);
+
+    boolean waitForPersistence(List<TransactionRequest> batch, Duration time);
 }
