@@ -16,7 +16,9 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -34,6 +36,17 @@ public class RedisServiceImp implements RedisService {
     private static final String DB_SNAPSHOT_KEY = "ledger:db:snapshot";
     private static final String PENDING_DELTA_KEY = "ledger:pending:delta";
     private static final String QUEUE_KEY = "ledger:queue";
+    private static final String PROCESSING_KEY = "ledger:queue:processing";
+
+    private static final String POP_BATCH_LUA = """
+            local items = redis.call('LPOP', KEYS[1], ARGV[1])
+            if items and #items > 0 then
+                -- unpack() safely expands the array into arguments for RPUSH
+                redis.call('RPUSH', KEYS[2], unpack(items))
+                return items
+            end
+            return {}
+            """;
 
     private static final String LEDGER_SCRIPT = """
             -- KEYS[1]: ledger:idempotency:set
@@ -76,6 +89,7 @@ public class RedisServiceImp implements RedisService {
             """;
 
     private String LEDGER_SCRIPT_SHA;
+    private String POP_BATCH_LUA_SHA;
 
     @PostConstruct
     public void loadScript() {
@@ -83,7 +97,12 @@ public class RedisServiceImp implements RedisService {
         LEDGER_SCRIPT_SHA = balanceTemplate.execute((RedisCallback<String>) connection ->
                 connection.scriptingCommands().scriptLoad(LEDGER_SCRIPT.getBytes(StandardCharsets.UTF_8))
         );
-        log.info("Ledger Lua script loaded with SHA: {}", LEDGER_SCRIPT_SHA);
+
+        POP_BATCH_LUA_SHA = balanceTemplate.execute((RedisCallback<String>) connection ->
+                connection.scriptingCommands().scriptLoad(POP_BATCH_LUA.getBytes(StandardCharsets.UTF_8))
+        );
+
+        log.info("Ledger Lua scripts loaded with SHA");
     }
 
     @Override
@@ -114,6 +133,92 @@ public class RedisServiceImp implements RedisService {
             return null;
         });
     }
+
+    @Override
+    public boolean waitForPersistence(List<TransactionRequest> batch, Duration timeout) {
+        long end = System.currentTimeMillis() + timeout.toMillis();
+
+        while (System.currentTimeMillis() < end) {
+            if (allConfirmed(batch)) {
+                // Cleanup: Delete the keys now that we've seen them
+                List<String> confirmationKeys = batch.stream()
+                        .map(req -> "confirmed:" + req.getReferenceId())
+                        .toList();
+                balanceTemplate.delete(confirmationKeys);
+
+                return true;
+            }
+
+            try {
+                // 100ms sleep prevents CPU thrashing while Virtual Thread waits
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false; // Timeout reached
+    }
+
+    public void signalConfirmation(List<TransactionRequest> batch) {
+        balanceTemplate.executePipelined((RedisCallback<Object>) connection -> {
+
+            for (TransactionRequest req : batch) {
+                String key = "confirmed:" + req.getReferenceId();
+                connection.setEx(key.getBytes(StandardCharsets.UTF_8), 60, "true".getBytes(StandardCharsets.UTF_8));
+            }
+
+            connection.del(PROCESSING_KEY.getBytes(StandardCharsets.UTF_8));
+
+            return null;
+        });
+    }
+
+    private boolean allConfirmed(List<TransactionRequest> batch) {
+        List<String> confirmationKeys = batch.stream()
+                .map(req -> "confirmed: " + req.getReferenceId())
+                .toList();
+
+        List<String> results = balanceTemplate.opsForValue().multiGet(confirmationKeys);
+
+        if (results == null || results.isEmpty()) {
+            return false;
+        }
+
+        for (String result : results) {
+            if (result == null || !"true".equals(result)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    @Override
+    public List<TransactionRequest> popFromQueue(int batchSize) {
+        List<String> rawItems = balanceTemplate.execute(
+                new DefaultRedisScript<>(POP_BATCH_LUA_SHA, List.class),
+                List.of(QUEUE_KEY, PROCESSING_KEY),
+                String.valueOf(batchSize)
+        );
+
+        if (rawItems == null || rawItems.isEmpty()) {
+            return List.of();
+        }
+
+        return rawItems.stream()
+                .map(json -> {
+                    try {
+                        return objectMapper.readValue(json, TransactionRequest.class);
+                    } catch (Exception e) {
+                        log.error("CRITICAL: Failed to deserialize transaction in queue. Payload: {}", json, e);
+                        return null;
+                    }
+                })
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
 
     private static final String COMMIT_LUA_STRING = """
             for i, json in ipairs(ARGV) do local tx = cjson.decode(json);

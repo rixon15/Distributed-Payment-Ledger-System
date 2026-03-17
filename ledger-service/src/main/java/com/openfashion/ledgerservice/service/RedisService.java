@@ -19,4 +19,8 @@ public interface RedisService {
     void processBatchAtomic(List<TransactionRequest> batch);
 
     boolean waitForPersistence(List<TransactionRequest> batch, Duration time);
+
+    void signalConfirmation(List<TransactionRequest> batch);
+
+    List<TransactionRequest> popFromQueue(int batchSize);
 }
