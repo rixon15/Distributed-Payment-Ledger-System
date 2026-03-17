@@ -91,6 +91,10 @@ services:
         echo 'Waiting for Debezium...'
         while ! curl -s http://debezium:8083/connectors > /dev/null; do sleep 2; done;
       
+        echo 'Cleaning old connectors...'
+        curl -X DELETE http://debezium:8083/connectors/payment-outbox-connector
+        curl -X DELETE http://debezium:8083/connectors/ledger-outbox-connector
+      
         echo 'Registering Payment Connector...'
         curl -i -X POST -H 'Accept:application/json' -H 'Content-Type:application/json' http://debezium:8083/connectors/ -d '{
           \"name\": \"payment-outbox-connector\",
@@ -98,10 +102,11 @@ services:
             \"connector.class\": \"io.debezium.connector.postgresql.PostgresConnector\",
             \"tasks.max\": \"1\",
             \"database.hostname\": \"postgres\",
-            \"database.port\": \"${POSTGRES_HOST_PORT}\",
+            \"database.port\": \"5432\",
             \"database.user\": \"${POSTGRES_USER}\",
             \"database.password\": \"${POSTGRES_PASSWORD}\",
             \"database.dbname\": \"payment_db\",
+            \"slot.name\": \"payment_outbox_slot\",
             \"topic.prefix\": \"payment-server\",
             \"plugin.name\": \"pgoutput\",
             \"table.include.list\": \"public.outbox_events\",
@@ -112,12 +117,12 @@ services:
             \"value.converter.schemas.enable\": \"false\",
             \"transforms\": \"outbox\",
             \"transforms.outbox.type\": \"io.debezium.transforms.outbox.EventRouter\",
+            \"transforms.outbox.route.topic.replacement\": \"$${routedByValue}\",
             \"transforms.outbox.table.field.event.id\": \"id\",
             \"transforms.outbox.table.field.event.key\": \"aggregate_id\",
             \"transforms.outbox.table.field.event.type\": \"event_type\",
             \"transforms.outbox.table.field.event.payload\": \"payload\",
             \"transforms.outbox.route.by.field\": \"event_type\",
-            \"transforms.outbox.route.topic.replacement\": \"$${routedByValue}\",
             \"transforms.outbox.table.expand.json.payload\": \"true\"
           }
         }'
@@ -129,10 +134,11 @@ services:
             \"connector.class\": \"io.debezium.connector.postgresql.PostgresConnector\",
             \"tasks.max\": \"1\",
             \"database.hostname\": \"postgres\",
-            \"database.port\": \"${POSTGRES_HOST_PORT}\",
+            \"database.port\": \"5432\",
             \"database.user\": \"${POSTGRES_USER}\",
             \"database.password\": \"${POSTGRES_PASSWORD}\",
             \"database.dbname\": \"ledger_db\",
+            \"slot.name\": \"ledger_outbox_slot\",
             \"topic.prefix\": \"ledger-server\",
             \"plugin.name\": \"pgoutput\",
             \"table.include.list\": \"public.outbox_events\",
@@ -143,12 +149,12 @@ services:
             \"value.converter.schemas.enable\": \"false\",
             \"transforms\": \"outbox\",
             \"transforms.outbox.type\": \"io.debezium.transforms.outbox.EventRouter\",
+            \"transforms.outbox.route.topic.replacement\": \"$${routedByValue}\",
             \"transforms.outbox.table.field.event.id\": \"id\",
             \"transforms.outbox.table.field.event.key\": \"aggregate_id\",
             \"transforms.outbox.table.field.event.type\": \"event_type\",
             \"transforms.outbox.table.field.event.payload\": \"payload\",
             \"transforms.outbox.route.by.field\": \"event_type\",
-            \"transforms.outbox.route.topic.replacement\": \"$${routedByValue}\",
             \"transforms.outbox.table.expand.json.payload\": \"true\"
           }
         }'
