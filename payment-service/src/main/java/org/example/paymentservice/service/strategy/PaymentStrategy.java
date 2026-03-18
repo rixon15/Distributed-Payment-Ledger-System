@@ -28,26 +28,27 @@ public abstract class PaymentStrategy {
     protected final RestClient restClient;
 
 
-    public abstract boolean supports(TransactionType type);
+    public abstract boolean supports(PaymentType type);
 
     public abstract void execute(Payment payment, PaymentRequest request);
 
-    protected void saveOutboxEvent(Payment payment, String eventType, String userMessage) {
+    protected void saveOutboxEvent(Payment payment, PaymentType eventType, String userMessage) {
         // Create Payload
         TransactionPayload payloadData = new TransactionPayload(
-                payment.getType(),
                 payment.getUserId(),
                 payment.getReceiverId(),
                 payment.getAmount(),
                 payment.getCurrency().toString(),
+                TransactionStatus.PENDING,
                 userMessage,
+                Instant.from(payment.getCreatedAt()),
                 null
         );
 
         TransactionInitiatedEvent eventPayload = new TransactionInitiatedEvent(
                 UUID.randomUUID(),
                 eventType,
-                payment.getId().toString(),
+                payment.getId(),
                 Instant.now(),
                 payloadData
         );
@@ -77,9 +78,9 @@ public abstract class PaymentStrategy {
             payment.setErrorMessage(internalReason);
             paymentRepository.save(payment);
 
-            saveOutboxEvent(payment, "TRANSACTION_FAILED", userMessage);
+            saveOutboxEvent(payment, payment.getType(), userMessage);
 
-            if (payment.getType() == TransactionType.WITHDRAWAL) {
+            if (payment.getType() == PaymentType.WITHDRAWAL) {
                 emitWithdrawalEvent(payment, WithdrawalStatus.RELEASE);
             }
         });
@@ -92,7 +93,7 @@ public abstract class PaymentStrategy {
             paymentRepository.save(payment);
 
             // Map PaymentStatus to Ledger's WithdrawalStatus
-            if (payment.getType() == TransactionType.WITHDRAWAL) {
+            if (payment.getType() == PaymentType.WITHDRAWAL) {
                 WithdrawalStatus ledgerStatus = switch (status) {
                     case PENDING -> WithdrawalStatus.RESERVE;
                     case AUTHORIZED -> WithdrawalStatus.COMPLETE;

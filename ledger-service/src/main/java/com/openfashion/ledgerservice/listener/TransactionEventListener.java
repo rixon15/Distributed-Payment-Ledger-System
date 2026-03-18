@@ -55,32 +55,6 @@ public class TransactionEventListener {
         });
     }
 
-//    @RetryableTopic(
-//            attempts = "5",
-//            backOff = @BackOff(delay = 1000, multiplier = 2.0),
-//            kafkaTemplate = "kafkaTemplate"
-//
-//    )
-//    @KafkaListener(
-//            topics = "transaction.initiated",
-//            groupId = "${spring.kafka.consumer.group-id}",
-//            containerFactory = "initiatedKafkaListenerContainerFactory"
-//    )
-//    public void handleTransactionInitiated(TransactionInitiatedEvent event, Acknowledgment acknowledgment) {
-//        log.info("Received transaction event: {} type: {}", event.eventId(), event.payload().type());
-//
-//        try {
-//            TransactionRequest request = mapEventToRequest(event);
-//
-//            ledgerService.processTransaction(request);
-//
-//            acknowledgment.acknowledge();
-//        } catch (Exception e) {
-//            log.error("Error processing transaction event: {}", event.referenceId(), e);
-//            //TODO: Create wrapper around the event to keep count of retry and if retry > 3 move to DLQ
-//        }
-//    }
-
     private TransactionRequest mapEventToRequest(TransactionInitiatedEvent event) {
         TransactionRequest request = new TransactionRequest();
         TransactionPayload payload = event.payload(); // Access the nested payload

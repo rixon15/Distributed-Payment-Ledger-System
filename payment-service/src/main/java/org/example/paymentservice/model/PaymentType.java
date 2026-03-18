@@ -1,9 +1,9 @@
 package org.example.paymentservice.model;
 
-public enum TransactionType {
+public enum PaymentType {
     DEPOSIT,
     WITHDRAWAL,
     TRANSFER,
     PAYMENT,
-    REFUND
+    REFUND,
 }

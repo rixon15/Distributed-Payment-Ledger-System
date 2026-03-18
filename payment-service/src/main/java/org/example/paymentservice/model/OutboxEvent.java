@@ -27,7 +27,8 @@ public class OutboxEvent {
     private String aggregateId;
 
     @Column(nullable = false)
-    private String eventType;
+    @Enumerated(EnumType.STRING)
+    private PaymentType eventType;
 
     @Column(columnDefinition = "jsonb", nullable = false)
     @JdbcTypeCode(SqlTypes.JSON)
