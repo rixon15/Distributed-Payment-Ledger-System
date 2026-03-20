@@ -123,7 +123,9 @@ services:
             \"transforms.outbox.table.field.event.key\": \"aggregate_id\",
             \"transforms.outbox.table.field.event.type\": \"event_type\",
             \"transforms.outbox.table.field.event.payload\": \"payload\",
-            \"transforms.outbox.table.expand.json.payload\": \"true\"
+            \"transforms.outbox.table.expand.json.payload\": \"true\",
+            \"heartbeat.interval.ms\": \"5000\",
+            \"heartbeat.action.query\": \"INSERT INTO public.outbox_events (id, aggregate_id, event_type, payload, status, created_at) VALUES (gen_random_uuid(), 'heartbeat', 'HEARTBEAT', '{}', 'PROCESSED', now())\"
           }
         }'
       
@@ -155,7 +157,9 @@ services:
             \"transforms.outbox.table.field.event.key\": \"aggregate_id\",
             \"transforms.outbox.table.field.event.type\": \"event_type\",
             \"transforms.outbox.table.field.event.payload\": \"payload\",
-            \"transforms.outbox.table.expand.json.payload\": \"true\"
+            \"transforms.outbox.table.expand.json.payload\": \"true\",
+            \"heartbeat.interval.ms\": \"5000\",
+            \"heartbeat.action.query\": \"INSERT INTO public.outbox_events (id, aggregate_id, event_type, payload, status, created_at) VALUES (gen_random_uuid(), 'heartbeat', 'HEARTBEAT', '{}', 'PROCESSED', now())\"
           }
         }'
       "
