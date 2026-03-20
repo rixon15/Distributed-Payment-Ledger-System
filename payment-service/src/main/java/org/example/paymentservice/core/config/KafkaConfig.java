@@ -54,26 +54,11 @@ public class KafkaConfig {
     }
 
     @Bean
-    public NewTopic withdrawalReserveTopic() {
-        return TopicBuilder.name("withdrawal.reserve")
-                .partitions(3) // Order is guaranteed within each partition
-                .replicas(1)   // Set to 3 in production
+    public NewTopic transactionRequestTopic() {
+        return TopicBuilder.name("transaction.request")
+                .partitions(3)
+                .replicas(3)
                 .build();
     }
 
-    @Bean
-    public NewTopic withdrawalCompleteTopic() {
-        return TopicBuilder.name("withdrawal.complete")
-                .partitions(3)
-                .replicas(1)
-                .build();
-    }
-
-    @Bean
-    public NewTopic withdrawalReleaseTopic() {
-        return TopicBuilder.name("withdrawal.release")
-                .partitions(3)
-                .replicas(1)
-                .build();
-    }
 }
