@@ -129,10 +129,12 @@ public class RedisServiceImp implements RedisService {
 
                     String checkNsfStr = checkNsf ? "1" : "0";
 
+                    String compositeIdempotencyKey = request.getReferenceId().toString() + "-" + request.getType().name();
+
                     operations.execute(
                             LEDGER_SPRING_SCRIPT,
                             List.of(IDEMPOTENCY_KEY, DB_SNAPSHOT_KEY, PENDING_DELTA_KEY, QUEUE_KEY),
-                            request.getReferenceId().toString(),
+                            compositeIdempotencyKey,
                             request.getDebitAccountId().toString(),
                             request.getAmount().toPlainString(),
                             request.getCreditAccountId().toString(),
