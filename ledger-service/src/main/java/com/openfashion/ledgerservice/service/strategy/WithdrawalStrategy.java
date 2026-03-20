@@ -53,7 +53,7 @@ public class WithdrawalStrategy extends LedgerStrategy {
                 log.info("Mapping Withdrawal Release Phase for {}", event.referenceId());
                 request.setType(TransactionType.WITHDRAWAL_RELEASE);
                 request.setDebitAccountId(resolveSystemAccount(PENDING_WITHDRAWAL_ACC, currencyType));
-                request.setCreditAccountId(resolveSystemAccount(WORLD_LIQUIDITY_ACC, currencyType));
+                request.setCreditAccountId(resolveUserAccount(payload.senderId(), currencyType));
             }
             default -> throw new IllegalArgumentException("Unknown withdrawal status: " + payload.status());
         }

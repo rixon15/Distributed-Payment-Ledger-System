@@ -4,7 +4,6 @@ import com.openfashion.ledgerservice.core.exceptions.UnsupportedTransactionExcep
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
 import com.openfashion.ledgerservice.model.TransactionType;
-import com.openfashion.ledgerservice.service.LedgerService;
 import com.openfashion.ledgerservice.service.RedisService;
 import com.openfashion.ledgerservice.service.strategy.LedgerStrategy;
 import io.confluent.parallelconsumer.ParallelStreamProcessor;
@@ -24,7 +23,6 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class TransactionEventListener {
 
-    private final LedgerService ledgerService;
     private final ParallelStreamProcessor<String, TransactionInitiatedEvent> parallelConsumer;
     private final RedisService redisService;
 
