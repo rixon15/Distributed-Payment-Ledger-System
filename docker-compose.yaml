@@ -117,12 +117,12 @@ services:
             \"value.converter.schemas.enable\": \"false\",
             \"transforms\": \"outbox\",
             \"transforms.outbox.type\": \"io.debezium.transforms.outbox.EventRouter\",
-            \"transforms.outbox.route.topic.replacement\": \"$${routedByValue}\",
+            \"transforms.outbox.route.topic.replacement\": \"transaction.request\",
+            \"transforms.outbox.aggregate.id.enforce\": \"true\",
             \"transforms.outbox.table.field.event.id\": \"id\",
             \"transforms.outbox.table.field.event.key\": \"aggregate_id\",
             \"transforms.outbox.table.field.event.type\": \"event_type\",
             \"transforms.outbox.table.field.event.payload\": \"payload\",
-            \"transforms.outbox.route.by.field\": \"event_type\",
             \"transforms.outbox.table.expand.json.payload\": \"true\"
           }
         }'
@@ -149,12 +149,12 @@ services:
             \"value.converter.schemas.enable\": \"false\",
             \"transforms\": \"outbox\",
             \"transforms.outbox.type\": \"io.debezium.transforms.outbox.EventRouter\",
-            \"transforms.outbox.route.topic.replacement\": \"$${routedByValue}\",
+            \"transforms.outbox.route.topic.replacement\": \"transaction.response\",
+            \"transforms.outbox.aggregate.id.enforce\": \"true\",
             \"transforms.outbox.table.field.event.id\": \"id\",
             \"transforms.outbox.table.field.event.key\": \"aggregate_id\",
             \"transforms.outbox.table.field.event.type\": \"event_type\",
             \"transforms.outbox.table.field.event.payload\": \"payload\",
-            \"transforms.outbox.route.by.field\": \"event_type\",
             \"transforms.outbox.table.expand.json.payload\": \"true\"
           }
         }'

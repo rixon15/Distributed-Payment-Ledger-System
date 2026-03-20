@@ -61,4 +61,11 @@ public class KafkaConfig {
                 .build();
     }
 
+    @Bean
+    public NewTopic transactionResponsesTopic() {
+        return TopicBuilder.name("transaction.repsonse")
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
 }
