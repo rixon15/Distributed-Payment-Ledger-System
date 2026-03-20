@@ -15,7 +15,6 @@ public enum TransactionType {
      * Ex: User sends money to their real bank account.
      */
     WITHDRAWAL,
-
     WITHDRAWAL_RESERVE,
     WITHDRAWAL_SETTLE,
     WITHDRAWAL_RELEASE,
