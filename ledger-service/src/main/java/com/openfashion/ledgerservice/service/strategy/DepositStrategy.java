@@ -28,7 +28,7 @@ public class DepositStrategy extends LedgerStrategy {
         TransactionPayload payload = event.payload();
 
         TransactionRequest request = new TransactionRequest();
-        request.setReceiverId(event.referenceId());
+        request.setReferenceId(event.referenceId());
         request.setType(event.eventType());
         request.setSenderId(payload.senderId());
         request.setReceiverId(payload.receiverId());

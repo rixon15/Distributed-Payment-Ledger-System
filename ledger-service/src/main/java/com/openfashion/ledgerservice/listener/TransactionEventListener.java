@@ -4,6 +4,7 @@ import com.openfashion.ledgerservice.core.exceptions.UnsupportedTransactionExcep
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
 import com.openfashion.ledgerservice.model.TransactionType;
+import com.openfashion.ledgerservice.service.LedgerBatchService;
 import com.openfashion.ledgerservice.service.RedisService;
 import com.openfashion.ledgerservice.service.strategy.LedgerStrategy;
 import io.confluent.parallelconsumer.ParallelStreamProcessor;
@@ -17,6 +18,7 @@ import java.time.Duration;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 @Component
 @Slf4j
@@ -28,6 +30,7 @@ public class TransactionEventListener {
 
     private final List<LedgerStrategy> strategyList;
     private final Map<TransactionType, LedgerStrategy> strategyMap = new EnumMap<>(TransactionType.class);
+    private final LedgerBatchService ledgerBatchService;
 
     @Order(1)
     @PostConstruct
@@ -70,16 +73,24 @@ public class TransactionEventListener {
                         return strategy.mapToRequest(event);
 
                     })
+                    .filter(Objects::nonNull)
                     .toList();
 
             if (batch.isEmpty()) return;
 
             log.info("Processing Kafka batch of size: {}", batch.size());
 
-            redisService.processBatchAtomic(batch);
+            Map<String, List<TransactionRequest>> results = redisService.processBatchAtomic(batch);
 
-            // High-load timeout (30s)
-            boolean success = redisService.waitForPersistence(batch, Duration.ofSeconds(30));
+            ledgerBatchService.persistRejectedNsf(results.get("nsf"));
+
+            boolean success = true;
+
+            if (!results.get("ok").isEmpty()) {
+                // High-load timeout (30s)
+                success = redisService.waitForPersistence(results.get("ok"), Duration.ofSeconds(30));
+            }
+
             if (!success) {
                 throw new RuntimeException("Db commit timeout - retrying batch");
             }

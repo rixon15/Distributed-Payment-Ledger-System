@@ -52,7 +52,7 @@ ALTER TABLE accounts
     ADD CONSTRAINT uc_accounts_user_id_currency UNIQUE (user_id, currency);
 
 ALTER TABLE transactions
-    ADD CONSTRAINT uc_transactions_reference_id UNIQUE (reference_id);
+    ADD CONSTRAINT uc_transactions_reference_id_type UNIQUE (reference_id, type);
 
 ALTER TABLE postings
     ADD CONSTRAINT FK_POSTINGS_ON_ACCOUNT FOREIGN KEY (account_id) REFERENCES accounts (id);

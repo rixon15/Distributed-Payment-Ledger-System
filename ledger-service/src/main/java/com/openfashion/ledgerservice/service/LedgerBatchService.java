@@ -6,9 +6,7 @@ import java.util.List;
 
 public interface LedgerBatchService {
 
-//    void processBatch(List<PendingTransaction> batch);
-
-//    List<UUID> findAlreadyProcessedIds(List<PendingTransaction> batch);
-
     void saveTransactions(List<TransactionRequest> batch);
+
+    void persistRejectedNsf(List<TransactionRequest> nsfList);
 }

@@ -5,9 +5,10 @@ import com.openfashion.ledgerservice.model.Account;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 public interface RedisService {
-    void processBatchAtomic(List<TransactionRequest> batch);
+    Map<String, List<TransactionRequest>> processBatchAtomic(List<TransactionRequest> batch);
 
     boolean waitForPersistence(List<TransactionRequest> batch, Duration time);
 

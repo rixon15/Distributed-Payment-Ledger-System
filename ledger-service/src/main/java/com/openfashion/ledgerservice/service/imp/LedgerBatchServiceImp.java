@@ -1,6 +1,7 @@
 package com.openfashion.ledgerservice.service.imp;
 
 import com.openfashion.ledgerservice.dto.TransactionRequest;
+import com.openfashion.ledgerservice.dto.event.TransactionResultEvent;
 import com.openfashion.ledgerservice.model.*;
 import com.openfashion.ledgerservice.repository.AccountRepository;
 import com.openfashion.ledgerservice.repository.OutboxRepository;
@@ -12,6 +13,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
@@ -50,13 +52,14 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
                 .map(TransactionRequest::getReferenceId)
                 .collect(Collectors.toSet());
 
-        Set<UUID> existingRefs = transactionRepository.findAllByReferenceIdIn(referenceIds)
-                .stream()
-                .map(Transaction::getReferenceId)
+        List<Transaction> existingTransactions = transactionRepository.findAllByReferenceIdIn(referenceIds);
+
+        Set<String> existingKeys = existingTransactions.stream()
+                .map(tx -> tx.getReferenceId() + "-" + tx.getType().name())
                 .collect(Collectors.toSet());
 
         List<TransactionRequest> newRequests = batch.stream()
-                .filter(req -> !existingRefs.contains(req.getReferenceId()))
+                .filter(req -> !existingKeys.contains(req.getReferenceId() + "-" + req.getType().name()))
                 .toList();
 
         if (newRequests.isEmpty()) {
@@ -88,13 +91,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
                 continue; // In reality, we'd route this to a manual review DLQ
             }
 
-            Transaction tx = Transaction.builder()
-                    .referenceId(req.getReferenceId())
-                    .type(req.getType())
-                    .status(TransactionStatus.POSTED)
-                    .effectiveDate(Instant.now())
-                    .metadata(serialize(req))
-                    .build();
+            Transaction tx = createTransaction(req, TransactionStatus.POSTED);
 
             transactions.add(tx);
 
@@ -105,7 +102,14 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
             netChanges.merge(creditAcc.getId(), req.getAmount(), BigDecimal::add);
 
             // Build Outbox Event (Keyed by Sender ID for downstream Parallel Consumer ordering)
-            outboxEvents.add(createOutboxEvent(req, debitAcc.getId()));
+            TransactionResultEvent resultEvent = createTransactionResultEvent(
+                    req,
+                    TransactionStatus.POSTED,
+                    "SUCCESS",
+                    "Transaction posted successfully"
+            );
+
+            outboxEvents.add(createOutboxEvent(req, debitAcc.getId(), resultEvent));
         }
 
         for (Map.Entry<UUID, BigDecimal> entry : netChanges.entrySet()) {
@@ -122,12 +126,48 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         log.info("Persisted batch of {} transactions to Postgres.", newRequests.size());
     }
 
-    private OutboxEvent createOutboxEvent(TransactionRequest req, UUID aggregateKey) {
+    @Override
+    @Transactional
+    public void persistRejectedNsf(List<TransactionRequest> nsfList) {
+
+        if (nsfList.isEmpty()) {
+            return;
+        }
+
+        List<OutboxEvent> outboxEvents = new ArrayList<>();
+        List<Transaction> transactions = new ArrayList<>();
+
+        for (TransactionRequest request : nsfList) {
+
+            Optional<Transaction> existingTransaction = transactionRepository.findByReferenceIdAndType(request.getReferenceId(), request.getType());
+
+            if (existingTransaction.isPresent()) {
+                log.warn("Duplicate NSF transaction detected for referenceId: {}, type: {}. Skipping.",
+                        request.getReferenceId(), request.getType());
+                continue;
+            }
+
+            TransactionResultEvent resultEvent = createTransactionResultEvent(
+                    request,
+                    TransactionStatus.REJECTED_NSF,
+                    "NSF",
+                    "Transaction rejected due to insufficient funds"
+            );
+
+            transactions.add(createTransaction(request, TransactionStatus.REJECTED_NSF));
+            outboxEvents.add(createOutboxEvent(request, request.getDebitAccountId(), resultEvent));
+        }
+
+        outboxRepository.saveAll(outboxEvents);
+        transactionRepository.saveAll(transactions);
+    }
+
+    private OutboxEvent createOutboxEvent(TransactionRequest req, UUID aggregateKey, TransactionResultEvent resultEvent) {
         return OutboxEvent.builder()
                 .aggregateId(aggregateKey.toString()) // Critical for Debezium Kafka Key
-                .eventType("transaction.posted")
-                .payload(serialize(req))
-                .status(OutboxStatus.PENDING) // Debezium uses this
+                .eventType(req.getType())
+                .payload(serialize(resultEvent))
+                .status(OutboxStatus.PROCESSED)
                 .createdAt(Instant.now())
                 .build();
     }
@@ -140,4 +180,24 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         }
     }
 
+    private TransactionResultEvent createTransactionResultEvent(TransactionRequest req, TransactionStatus status, String reasonCode, String message) {
+        return new TransactionResultEvent(
+                req.getReferenceId(),
+                req.getType(),
+                status,
+                reasonCode,
+                message,
+                Instant.now()
+        );
+    }
+
+    private Transaction createTransaction(TransactionRequest request, TransactionStatus status) {
+        return Transaction.builder()
+                .referenceId(request.getReferenceId())
+                .type(request.getType())
+                .status(status)
+                .effectiveDate(Instant.now())
+                .metadata(serialize(request))
+                .build();
+    }
 }

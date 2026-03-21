@@ -91,14 +91,8 @@ services:
         echo 'Waiting for Debezium...'
         while ! curl -s http://debezium:8083/connectors > /dev/null; do sleep 2; done;
       
-        echo 'Cleaning old connectors...'
-        curl -X DELETE http://debezium:8083/connectors/payment-outbox-connector
-        curl -X DELETE http://debezium:8083/connectors/ledger-outbox-connector
-      
         echo 'Registering Payment Connector...'
-        curl -i -X POST -H 'Accept:application/json' -H 'Content-Type:application/json' http://debezium:8083/connectors/ -d '{
-          \"name\": \"payment-outbox-connector\",
-          \"config\": {
+        curl -i -X PUT -H 'Accept:application/json' -H 'Content-Type:application/json' http://debezium:8083/connectors/payment-outbox-connector/config -d '{
             \"connector.class\": \"io.debezium.connector.postgresql.PostgresConnector\",
             \"tasks.max\": \"1\",
             \"database.hostname\": \"postgres\",
@@ -117,22 +111,18 @@ services:
             \"value.converter.schemas.enable\": \"false\",
             \"transforms\": \"outbox\",
             \"transforms.outbox.type\": \"io.debezium.transforms.outbox.EventRouter\",
-            \"transforms.outbox.route.topic.replacement\": \"transaction.request\",
-            \"transforms.outbox.aggregate.id.enforce\": \"true\",
             \"transforms.outbox.table.field.event.id\": \"id\",
             \"transforms.outbox.table.field.event.key\": \"aggregate_id\",
             \"transforms.outbox.table.field.event.type\": \"event_type\",
             \"transforms.outbox.table.field.event.payload\": \"payload\",
             \"transforms.outbox.table.expand.json.payload\": \"true\",
-            \"heartbeat.interval.ms\": \"5000\",
-            \"heartbeat.action.query\": \"INSERT INTO public.outbox_events (id, aggregate_id, event_type, payload, status, created_at) VALUES (gen_random_uuid(), 'heartbeat', 'HEARTBEAT', '{}', 'PROCESSED', now())\"
-          }
+            \"transforms.outbox.route.by.field\": \"event_type\",
+            \"transforms.outbox.route.topic.regex\": \".*\",
+            \"transforms.outbox.route.topic.replacement\": \"transaction.request\"
         }'
       
         echo 'Registering Ledger Connector...'
-        curl -i -X POST -H 'Accept:application/json' -H 'Content-Type:application/json' http://debezium:8083/connectors/ -d '{
-          \"name\": \"ledger-outbox-connector\",
-          \"config\": {
+        curl -i -X PUT -H 'Accept:application/json' -H 'Content-Type:application/json' http://debezium:8083/connectors/ledger-outbox-connector/config -d '{
             \"connector.class\": \"io.debezium.connector.postgresql.PostgresConnector\",
             \"tasks.max\": \"1\",
             \"database.hostname\": \"postgres\",
@@ -151,16 +141,14 @@ services:
             \"value.converter.schemas.enable\": \"false\",
             \"transforms\": \"outbox\",
             \"transforms.outbox.type\": \"io.debezium.transforms.outbox.EventRouter\",
-            \"transforms.outbox.route.topic.replacement\": \"transaction.response\",
-            \"transforms.outbox.aggregate.id.enforce\": \"true\",
             \"transforms.outbox.table.field.event.id\": \"id\",
             \"transforms.outbox.table.field.event.key\": \"aggregate_id\",
             \"transforms.outbox.table.field.event.type\": \"event_type\",
             \"transforms.outbox.table.field.event.payload\": \"payload\",
             \"transforms.outbox.table.expand.json.payload\": \"true\",
-            \"heartbeat.interval.ms\": \"5000\",
-            \"heartbeat.action.query\": \"INSERT INTO public.outbox_events (id, aggregate_id, event_type, payload, status, created_at) VALUES (gen_random_uuid(), 'heartbeat', 'HEARTBEAT', '{}', 'PROCESSED', now())\"
-          }
+            \"transforms.outbox.route.by.field\": \"event_type\",
+            \"transforms.outbox.route.topic.regex\": \".*\",
+            \"transforms.outbox.route.topic.replacement\": \"transaction.response\"
         }'
       "
 

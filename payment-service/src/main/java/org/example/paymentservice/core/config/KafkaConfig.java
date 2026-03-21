@@ -63,7 +63,7 @@ public class KafkaConfig {
 
     @Bean
     public NewTopic transactionResponsesTopic() {
-        return TopicBuilder.name("transaction.repsonse")
+        return TopicBuilder.name("transaction.response")
                 .partitions(3)
                 .replicas(1)
                 .build();

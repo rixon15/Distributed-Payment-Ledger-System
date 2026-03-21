@@ -1,7 +1,6 @@
 package com.openfashion.ledgerservice.service.imp;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.openfashion.ledgerservice.core.exceptions.InsufficientFundsException;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.model.Account;
 import com.openfashion.ledgerservice.service.RedisService;
@@ -17,7 +16,9 @@ import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 @Service
@@ -87,7 +88,11 @@ public class RedisServiceImp implements RedisService {
     }
 
     @Override
-    public void processBatchAtomic(List<TransactionRequest> batch) {
+    public Map<String, List<TransactionRequest>> processBatchAtomic(List<TransactionRequest> batch) {
+
+        List<TransactionRequest> okList = new ArrayList<>();
+        List<TransactionRequest> nsfList = new ArrayList<>();
+
         List<Object> results = balanceTemplate.executePipelined(new org.springframework.data.redis.core.SessionCallback<Object>() {
             @Override
             public Object execute(org.springframework.data.redis.core.RedisOperations operations) throws org.springframework.dao.DataAccessException {
@@ -118,8 +123,13 @@ public class RedisServiceImp implements RedisService {
 
         for (int i = 0; i < batch.size(); i++) {
             String resultStr = (String) results.get(i);
-            handleScriptResult(resultStr, batch.get(i));
+            handleScriptResult(resultStr, batch.get(i), okList, nsfList);
         }
+
+        return Map.of(
+                "ok", okList,
+                "nsf", nsfList
+        );
     }
 
     public void initializeSnapshotIfMissing(Account account) {
@@ -164,14 +174,18 @@ public class RedisServiceImp implements RedisService {
         });
     }
 
-    private void handleScriptResult(String result, TransactionRequest request) {
+    private void handleScriptResult(String result, TransactionRequest request, List<TransactionRequest> okList, List<TransactionRequest> nsfList) {
         switch (result) {
             case "OK":
+                okList.add(request);
+                break;
             case "DUPLICATE":
                 break;
             case "NSF":
                 log.warn("Insufficient funds for transaction {}", request.getReferenceId());
-                throw new InsufficientFundsException(request.getSenderId());
+//                throw new InsufficientFundsException(request.getSenderId());
+                nsfList.add(request);
+                break;
             default:
                 throw new RuntimeException("Unexpected Redis response: " + result);
         }

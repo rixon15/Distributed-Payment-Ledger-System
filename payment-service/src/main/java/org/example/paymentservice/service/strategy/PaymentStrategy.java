@@ -15,6 +15,7 @@ import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.UUID;
 
 @Slf4j
@@ -41,7 +42,7 @@ public abstract class PaymentStrategy {
                 payment.getCurrency().toString(),
                 status,
                 userMessage,
-                Instant.from(payment.getCreatedAt()),
+                payment.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant(),
                 null
         );
 
@@ -90,7 +91,7 @@ public abstract class PaymentStrategy {
             paymentRepository.save(payment);
 
             TransactionStatus ledgerStatus = switch (status) {
-                case AUTHORIZED -> TransactionStatus.SUCCESS;
+                case AUTHORIZED -> TransactionStatus.POSTED;
                 case FAILED -> TransactionStatus.FAILED;
                 default -> TransactionStatus.PENDING;
             };
