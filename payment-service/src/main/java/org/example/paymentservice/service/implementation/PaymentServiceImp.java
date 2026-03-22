@@ -42,7 +42,7 @@ public class PaymentServiceImp implements PaymentService {
     private final RequestLockService requestLockService;
 
 
-    private final Map<TransactionType, PaymentStrategy> strategyMap = new EnumMap<>(TransactionType.class);
+    private final Map<PaymentType, PaymentStrategy> strategyMap = new EnumMap<>(PaymentType.class);
 
     @Value("${app.risk-engine.url}")
     private String riskEngineUrl;
@@ -52,13 +52,13 @@ public class PaymentServiceImp implements PaymentService {
     public void initStrategies() {
         log.info("Initializing Payment Strategies...");
 
-        for (TransactionType type : TransactionType.values()) {
+        for (PaymentType type : PaymentType.values()) {
             strategyList.stream()
                     .filter(strategy -> strategy.supports(type))
                     .findFirst()
                     .ifPresentOrElse(
                             strategy -> strategyMap.put(type, strategy),
-                            () -> log.warn("No strategy found for TransactionType: {}", type)
+                            () -> log.warn("No strategy found for PaymentType: {}", type)
                     );
         }
 
@@ -74,14 +74,14 @@ public class PaymentServiceImp implements PaymentService {
             throw new UnsupportedOperationException("No strategy found for type: " + request.type());
         }
 
-        if (request.type() == TransactionType.TRANSFER && senderId.equals(request.receiverId())) {
+        if (request.type() == PaymentType.TRANSFER && senderId.equals(request.receiverId())) {
             log.warn("Blocked self-transfer attempt for user: {}", senderId);
             throw new InvalidTransferException("You cannot transfer money to your own account.");
         }
 
         UUID receiverId;
 
-        if (request.type() == TransactionType.DEPOSIT || request.type() == TransactionType.WITHDRAWAL) {
+        if (request.type() == PaymentType.DEPOSIT || request.type() == PaymentType.WITHDRAWAL) {
             receiverId = senderId;
         } else {
             receiverId = request.receiverId();
@@ -193,14 +193,13 @@ public class PaymentServiceImp implements PaymentService {
         payment.setStatus(PaymentStatus.MANUAL_REVIEW);
         payment.setErrorMessage(reason);
         payment.setUpdatedAt(LocalDateTime.now());
-
         paymentRepository.save(payment);
 
+        //TODO: implement a way to handle the payments manually
         outboxRepository.save(
                 OutboxEvent.builder()
                         .aggregateId(payment.getId().toString())
-                        .eventType("PAYMENT_HELD_FOR_REVIEW")
-                        .status(OutboxStatus.PENDING)
+                        .eventType(payment.getType())
                         .payload(objectMapper.writeValueAsString(payment))
                         .createdAt(Instant.now())
                         .build()

@@ -15,6 +15,7 @@ import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.UUID;
 
 @Slf4j
@@ -28,26 +29,27 @@ public abstract class PaymentStrategy {
     protected final RestClient restClient;
 
 
-    public abstract boolean supports(TransactionType type);
+    public abstract boolean supports(PaymentType type);
 
     public abstract void execute(Payment payment, PaymentRequest request);
 
-    protected void saveOutboxEvent(Payment payment, String eventType, String userMessage) {
+    protected void saveOutboxEvent(Payment payment, TransactionStatus status, String userMessage) {
         // Create Payload
         TransactionPayload payloadData = new TransactionPayload(
-                payment.getType(),
                 payment.getUserId(),
                 payment.getReceiverId(),
                 payment.getAmount(),
                 payment.getCurrency().toString(),
+                status,
                 userMessage,
+                payment.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant(),
                 null
         );
 
         TransactionInitiatedEvent eventPayload = new TransactionInitiatedEvent(
                 UUID.randomUUID(),
-                eventType,
-                payment.getId().toString(),
+                payment.getType(),
+                payment.getId(),
                 Instant.now(),
                 payloadData
         );
@@ -56,15 +58,15 @@ public abstract class PaymentStrategy {
             String jsonPayload = objectMapper.writeValueAsString(eventPayload);
 
             OutboxEvent outbox = OutboxEvent.builder()
-                    .aggregateId(payment.getId().toString())
-                    .eventType(eventType)
+                    .aggregateId(payment.getUserId().toString())
+                    .eventType(payment.getType())
                     .payload(jsonPayload)
-                    .status(OutboxStatus.PENDING)
                     .createdAt(Instant.now())
                     .build();
 
             outboxRepository.save(outbox);
         } catch (Exception e) {
+            log.error("Failed to queue outbox event for payment {}", payment.getId(), e);
             throw new SerializationFailedException("Failed to serialize event", e);
         }
     }
@@ -72,63 +74,29 @@ public abstract class PaymentStrategy {
     protected void handleFailure(Payment payment, String internalReason, String userMessage) {
         log.warn("Payment {} failed: {}", payment.getId(), internalReason);
 
-        tx.executeWithoutResult(status -> {
+        tx.executeWithoutResult(_ -> {
             payment.setStatus(PaymentStatus.FAILED);
             payment.setErrorMessage(internalReason);
             paymentRepository.save(payment);
 
-            saveOutboxEvent(payment, "TRANSACTION_FAILED", userMessage);
-
-            if (payment.getType() == TransactionType.WITHDRAWAL) {
-                emitWithdrawalEvent(payment, WithdrawalStatus.FAILED);
-            }
+            saveOutboxEvent(payment, TransactionStatus.FAILED, userMessage);
         });
     }
 
     protected void finalizeStatus(Payment payment, PaymentStatus status, UUID externalId) {
-        tx.executeWithoutResult(ts -> {
+        tx.executeWithoutResult(_ -> {
             payment.setStatus(status);
             payment.setExternalTransactionId(externalId != null ? externalId.toString() : null);
             paymentRepository.save(payment);
 
-            // Map PaymentStatus to Ledger's WithdrawalStatus
-            if (payment.getType() == TransactionType.WITHDRAWAL) {
-                WithdrawalStatus ledgerStatus = switch (status) {
-                    case PENDING -> WithdrawalStatus.RESERVED;
-                    case AUTHORIZED -> WithdrawalStatus.CONFIRMED;
-                    case FAILED -> WithdrawalStatus.FAILED;
-                    default -> null;
-                };
+            TransactionStatus ledgerStatus = switch (status) {
+                case AUTHORIZED -> TransactionStatus.POSTED;
+                case FAILED -> TransactionStatus.FAILED;
+                default -> TransactionStatus.PENDING;
+            };
 
-                if (ledgerStatus != null) {
-                    emitWithdrawalEvent(payment, ledgerStatus);
-                }
-            } else {
-                saveOutboxEvent(payment, "TRANSACTION_INITIATED", null);
-            }
+            saveOutboxEvent(payment, ledgerStatus, null);
         });
-    }
-
-    private void emitWithdrawalEvent(Payment payment, WithdrawalStatus status) {
-        WithdrawalEvent event = new WithdrawalEvent(
-                payment.getId(),
-                payment.getUserId(),
-                status,
-                new WithdrawalPayload(payment.getAmount(), payment.getCurrency()),
-                System.currentTimeMillis()
-        );
-
-        try {
-            outboxRepository.save(OutboxEvent.builder()
-                    .aggregateId(payment.getId().toString())
-                    .eventType("WITHDRAWAL_" + status.name())
-                    .payload(objectMapper.writeValueAsString(event))
-                    .status(OutboxStatus.PENDING)
-                    .createdAt(Instant.now())
-                    .build());
-        } catch (Exception e) {
-            throw new RuntimeException("Event serialization failed", e);
-        }
     }
 
     protected void reconcileWithBank(Payment payment, BankPaymentResponse bankResult, String bankUrl, int retryCount) {

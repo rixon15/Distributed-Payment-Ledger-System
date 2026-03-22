@@ -27,15 +27,12 @@ public class OutboxEvent {
     private String aggregateId;
 
     @Column(nullable = false)
-    private String eventType;
+    @Enumerated(EnumType.STRING)
+    private TransactionType eventType;
 
     @Column(columnDefinition = "jsonb", nullable = false)
     @JdbcTypeCode(SqlTypes.JSON)
     private String payload;
-
-    @Column(nullable = false)
-    @Enumerated(EnumType.STRING)
-    private OutboxStatus status;
 
     @Column(nullable = false)
     private Instant createdAt;

@@ -42,17 +42,14 @@ CREATE TABLE outbox_events
     aggregate_id VARCHAR(255) NOT NULL,
     event_type   VARCHAR(50)  NOT NULL,
     payload      JSONB        NOT NULL,
-    created_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    status       VARCHAR(20)              DEFAULT 'PENDING'
+    created_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE INDEX idx_outbox_status ON outbox_events (status, created_at);
 
 ALTER TABLE accounts
     ADD CONSTRAINT uc_accounts_user_id_currency UNIQUE (user_id, currency);
 
 ALTER TABLE transactions
-    ADD CONSTRAINT uc_transactions_reference_id UNIQUE (reference_id);
+    ADD CONSTRAINT uc_transactions_reference_id_type UNIQUE (reference_id, type);
 
 ALTER TABLE postings
     ADD CONSTRAINT FK_POSTINGS_ON_ACCOUNT FOREIGN KEY (account_id) REFERENCES accounts (id);
@@ -65,5 +62,3 @@ ALTER TABLE postings
 CREATE INDEX idx_postings_transaction_id ON postings (transaction_id);
 
 CREATE INDEX idx_accounts_name ON accounts (name);
-
-CREATE INDEX idx_transaction_status ON transactions (status);

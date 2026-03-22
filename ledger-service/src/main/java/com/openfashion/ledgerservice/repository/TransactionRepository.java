@@ -1,6 +1,7 @@
 package com.openfashion.ledgerservice.repository;
 
 import com.openfashion.ledgerservice.model.Transaction;
+import com.openfashion.ledgerservice.model.TransactionType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -12,9 +13,7 @@ import java.util.UUID;
 @Repository
 public interface TransactionRepository extends JpaRepository<Transaction, UUID> {
 
-    boolean existsByReferenceId(UUID referenceId);
-
-    Optional<Transaction> findByReferenceId(UUID referenceId);
-
     List<Transaction> findAllByReferenceIdIn(Set<UUID> refIds);
+
+    Optional<Transaction> findByReferenceIdAndType(UUID referenceId, TransactionType type);
 }

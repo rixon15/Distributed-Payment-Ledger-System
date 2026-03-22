@@ -40,7 +40,7 @@ public class Payment {
 
     @Column(nullable = false)
     @Enumerated(EnumType.STRING)
-    private TransactionType type;
+    private PaymentType type;
 
     @Column(nullable = false, unique = true)
     private String idempotencyKey;

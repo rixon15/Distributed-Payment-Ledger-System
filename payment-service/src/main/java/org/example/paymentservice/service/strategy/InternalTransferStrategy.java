@@ -4,7 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.example.paymentservice.dto.PaymentRequest;
 import org.example.paymentservice.model.Payment;
 import org.example.paymentservice.model.PaymentStatus;
-import org.example.paymentservice.model.TransactionType;
+import org.example.paymentservice.model.PaymentType;
 import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
 import org.springframework.stereotype.Component;
@@ -23,11 +23,11 @@ public class InternalTransferStrategy extends PaymentStrategy {
     }
 
     @Override
-    public boolean supports(TransactionType type) {
+    public boolean supports(PaymentType type) {
         //Grouping all "Ledger only" user initiated moves
-        return type == TransactionType.TRANSFER ||
-                type == TransactionType.PAYMENT ||
-                type == TransactionType.REFUND;
+        return type == PaymentType.TRANSFER ||
+                type == PaymentType.PAYMENT ||
+                type == PaymentType.REFUND;
     }
 
     @Override

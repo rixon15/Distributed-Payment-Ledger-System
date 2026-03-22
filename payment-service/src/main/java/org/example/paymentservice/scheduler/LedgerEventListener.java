@@ -2,7 +2,9 @@ package org.example.paymentservice.scheduler;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.example.paymentservice.core.exception.PaymentNotFoundException;
 import org.example.paymentservice.model.Payment;
+import org.example.paymentservice.model.PaymentStatus;
 import org.example.paymentservice.repository.PaymentRepository;
 import org.example.paymentservice.service.strategy.WithdrawStrategy;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -21,38 +23,44 @@ public class LedgerEventListener {
     private final WithdrawStrategy withdrawStrategy;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @KafkaListener(topics = "ledger.funds.reserved", groupId = "payment-group")
-    public void onFundsReserved(String message) {
+    @KafkaListener(topics = "transaction.response", groupId = "payment-group")
+    public void onLedgerResponse(String message) {
         try {
-            JsonNode payload = objectMapper.readTree(message);
+            JsonNode eventNode = objectMapper.readTree(message);
 
-            if (payload.isTextual()) {
-                payload = objectMapper.readTree(payload.asText());
+            if (eventNode.isString()) {
+                eventNode = objectMapper.readTree(eventNode.asString());
             }
 
-            // 1. SAFELY EXTRACT THE RAW STRING (NO QUOTES)
-            String refIdStr = payload.path("referenceId").asText(null);
+            String type = eventNode.path("type").asString(null);
 
-            // 2. CHECK IF IT WAS MISSING
+            if (!"WITHDRAWAL_RESERVE".equals(type)) {
+                return;
+            }
+
+            String refIdStr = eventNode.path("referenceId").asString(null);
+
             if (refIdStr == null || refIdStr.isBlank()) {
-                log.warn("Discarding invalid message: missing 'referenceId'. Payload: {}", message);
-                return; // Discard and acknowledge so Kafka moves on
+                log.warn("Discarding invalid message: missing referenceId. Payload: {}", message);
+                return;
             }
 
-            // 3. PARSE THE CLEAN UUID
             UUID paymentId = UUID.fromString(refIdStr);
-
             Payment payment = paymentRepository.findById(paymentId)
-                    .orElseThrow(() -> new RuntimeException("Payment not found in DB: " + paymentId));
+                    .orElseThrow(() -> new PaymentNotFoundException(paymentId));
 
-            log.info("Ledger confirmed reservation. Calling bank for payment: {}", paymentId);
+            if (payment.getStatus() != PaymentStatus.PENDING) {
+                log.info("Payment {} is already in status {}. Skipping bank call", paymentId, payment.getStatus());
+                return;
+            }
+
+            log.info("Ledger confirmed WITHDRAWAL_RESERVE. Calling bank for payment: {}", paymentId);
             withdrawStrategy.reconcilePaymentWithBank(payment);
-
         } catch (IllegalArgumentException _) {
             log.error("Discarding message with invalid UUID format. Payload: {}", message);
         } catch (Exception e) {
-            log.error("System error processing reservation confirmation", e);
-            throw new RuntimeException("Failed to process ledger reservation confirmation", e);
+            log.error("System error processing ledger response", e);
+            throw new RuntimeException("Failed to process ledger response", e);
         }
     }
 }
