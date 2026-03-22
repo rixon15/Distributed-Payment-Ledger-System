@@ -35,9 +35,5 @@ public class OutboxEvent {
     private String payload;
 
     @Column(nullable = false)
-    @Enumerated(EnumType.STRING)
-    private OutboxStatus status;
-
-    @Column(nullable = false)
     private Instant createdAt;
 }

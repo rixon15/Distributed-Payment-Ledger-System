@@ -1,6 +1,7 @@
 package com.openfashion.ledgerservice.service;
 
 import com.openfashion.ledgerservice.dto.TransactionRequest;
+import com.openfashion.ledgerservice.dto.redis.RedisMessage;
 import com.openfashion.ledgerservice.model.Account;
 
 import java.time.Duration;
@@ -12,9 +13,9 @@ public interface RedisService {
 
     boolean waitForPersistence(List<TransactionRequest> batch, Duration time);
 
-    void signalConfirmation(List<TransactionRequest> batch);
+    void signalConfirmation(List<RedisMessage<TransactionRequest>> batch);
 
-    List<TransactionRequest> popFromQueue(int batchSize);
+    List<RedisMessage<TransactionRequest>> popFromQueue(int batchSize);
 
     void initializeSnapshotIfMissing(Account account);
 }

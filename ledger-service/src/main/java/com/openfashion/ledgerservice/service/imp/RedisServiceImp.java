@@ -1,15 +1,21 @@
 package com.openfashion.ledgerservice.service.imp;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
+import com.openfashion.ledgerservice.dto.redis.RedisMessage;
 import com.openfashion.ledgerservice.model.Account;
 import com.openfashion.ledgerservice.service.RedisService;
+import io.lettuce.core.RedisException;
 import jakarta.annotation.PostConstruct;
+import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.connection.ReturnType;
+import org.springframework.core.serializer.support.SerializationFailedException;
 import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
@@ -19,7 +25,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
@@ -34,15 +39,6 @@ public class RedisServiceImp implements RedisService {
     private static final String PENDING_DELTA_KEY = "ledger:pending:delta";
     private static final String QUEUE_KEY = "ledger:queue";
     private static final String PROCESSING_KEY = "ledger:queue:processing";
-
-    private static final String POP_BATCH_LUA = """
-            local items = redis.call('LPOP', KEYS[1], ARGV[1])
-            if items and #items > 0 then
-                redis.call('RPUSH', KEYS[2], unpack(items))
-                return items
-            end
-            return {}
-            """;
 
     private static final String LEDGER_SCRIPT = """
             if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 1 then
@@ -69,7 +65,6 @@ public class RedisServiceImp implements RedisService {
             return 'OK'
             """;
 
-    private String POP_BATCH_LUA_SHA;
 
     private static final RedisScript<String> LEDGER_SPRING_SCRIPT =
             new DefaultRedisScript<>(LEDGER_SCRIPT, String.class);
@@ -78,10 +73,6 @@ public class RedisServiceImp implements RedisService {
     public void loadScript() {
         balanceTemplate.execute((RedisCallback<String>) connection ->
                 connection.scriptingCommands().scriptLoad(LEDGER_SCRIPT.getBytes(StandardCharsets.UTF_8))
-        );
-
-        POP_BATCH_LUA_SHA = balanceTemplate.execute((RedisCallback<String>) connection ->
-                connection.scriptingCommands().scriptLoad(POP_BATCH_LUA.getBytes(StandardCharsets.UTF_8))
         );
 
         log.info("Ledger Lua scripts loaded with SHA");
@@ -93,9 +84,9 @@ public class RedisServiceImp implements RedisService {
         List<TransactionRequest> okList = new ArrayList<>();
         List<TransactionRequest> nsfList = new ArrayList<>();
 
-        List<Object> results = balanceTemplate.executePipelined(new org.springframework.data.redis.core.SessionCallback<Object>() {
+        List<Object> results = balanceTemplate.executePipelined(new SessionCallback<>() {
             @Override
-            public Object execute(org.springframework.data.redis.core.RedisOperations operations) throws org.springframework.dao.DataAccessException {
+            public Object execute(@NonNull RedisOperations operations) throws org.springframework.dao.DataAccessException {
                 for (TransactionRequest request : batch) {
 
                     boolean checkNsf = switch (request.getType()) {
@@ -147,7 +138,7 @@ public class RedisServiceImp implements RedisService {
         while (System.currentTimeMillis() < end) {
             if (allConfirmed(batch)) {
                 List<String> confirmationKeys = batch.stream()
-                        .map(req -> "confirmed:" + req.getReferenceId())
+                        .map(this::buildConfirmationKey)
                         .toList();
                 balanceTemplate.delete(confirmationKeys);
                 return true;
@@ -155,7 +146,7 @@ public class RedisServiceImp implements RedisService {
 
             try {
                 Thread.sleep(100);
-            } catch (InterruptedException e) {
+            } catch (InterruptedException _) {
                 Thread.currentThread().interrupt();
                 return false;
             }
@@ -163,15 +154,29 @@ public class RedisServiceImp implements RedisService {
         return false;
     }
 
-    public void signalConfirmation(List<TransactionRequest> batch) {
+    public void signalConfirmation(List<RedisMessage<TransactionRequest>> messages) {
+
         balanceTemplate.executePipelined((RedisCallback<Object>) connection -> {
-            for (TransactionRequest req : batch) {
-                String key = "confirmed:" + req.getReferenceId();
-                connection.setEx(key.getBytes(StandardCharsets.UTF_8), 60, "true".getBytes(StandardCharsets.UTF_8));
+
+            byte[] processingKeyBytes = PROCESSING_KEY.getBytes(StandardCharsets.UTF_8);
+            byte[] trueBytes = "true".getBytes(StandardCharsets.UTF_8);
+
+            for (RedisMessage<TransactionRequest> msg : messages) {
+                TransactionRequest requests = msg.data();
+
+                String confirmationKey = buildConfirmationKey(requests);
+                connection.stringCommands().setEx(confirmationKey.getBytes(StandardCharsets.UTF_8), 60, trueBytes);
+
+                byte[] rawValueBytes = msg.rawJson().getBytes(StandardCharsets.UTF_8);
+                connection.listCommands().lRem(processingKeyBytes, 1, rawValueBytes);
             }
-            connection.del(PROCESSING_KEY.getBytes(StandardCharsets.UTF_8));
+
             return null;
         });
+    }
+
+    private String buildConfirmationKey(TransactionRequest request) {
+        return "confirmed:" + request.getReferenceId().toString() + "-" + request.getType().name();
     }
 
     private void handleScriptResult(String result, TransactionRequest request, List<TransactionRequest> okList, List<TransactionRequest> nsfList) {
@@ -183,17 +188,16 @@ public class RedisServiceImp implements RedisService {
                 break;
             case "NSF":
                 log.warn("Insufficient funds for transaction {}", request.getReferenceId());
-//                throw new InsufficientFundsException(request.getSenderId());
                 nsfList.add(request);
                 break;
             default:
-                throw new RuntimeException("Unexpected Redis response: " + result);
+                throw new RedisException("Unexpected Redis response: " + result);
         }
     }
 
     private boolean allConfirmed(List<TransactionRequest> batch) {
         List<String> confirmationKeys = batch.stream()
-                .map(req -> "confirmed:" + req.getReferenceId())
+                .map(this::buildConfirmationKey)
                 .toList();
 
         List<String> results = balanceTemplate.opsForValue().multiGet(confirmationKeys);
@@ -201,45 +205,39 @@ public class RedisServiceImp implements RedisService {
         if (results == null || results.isEmpty()) return false;
 
         for (String result : results) {
-            if (result == null || !"true".equals(result)) return false;
+            if (!"true".equals(result)) return false;
         }
         return true;
     }
 
     @Override
-    public List<TransactionRequest> popFromQueue(int batchSize) {
-        List<byte[]> rawItems = balanceTemplate.execute((RedisCallback<List<byte[]>>) connection -> {
-            return connection.scriptingCommands().evalSha(
-                    POP_BATCH_LUA_SHA.getBytes(StandardCharsets.UTF_8),
-                    ReturnType.MULTI,
-                    2,
-                    QUEUE_KEY.getBytes(StandardCharsets.UTF_8),
-                    PROCESSING_KEY.getBytes(StandardCharsets.UTF_8),
-                    String.valueOf(batchSize).getBytes(StandardCharsets.UTF_8)
-            );
-        });
+    public List<RedisMessage<TransactionRequest>> popFromQueue(int batchSize) {
 
-        if (rawItems == null || rawItems.isEmpty()) return List.of();
+        List<RedisMessage<TransactionRequest>> batch = new ArrayList<>();
 
-        return rawItems.stream()
-                .map(bytes -> {
-                    try {
-                        String json = new String(bytes, StandardCharsets.UTF_8);
-                        return objectMapper.readValue(json, TransactionRequest.class);
-                    } catch (Exception e) {
-                        log.error("CRITICAL: Failed to deserialize transaction in queue.", e);
-                        return null;
-                    }
-                })
-                .filter(Objects::nonNull)
-                .toList();
+        for (int i = 0; i < batchSize; ++i) {
+
+            String rawJson = balanceTemplate.opsForList().rightPopAndLeftPush(QUEUE_KEY, PROCESSING_KEY);
+
+            if (rawJson == null) break;
+
+            try {
+                TransactionRequest request = objectMapper.readValue(rawJson, TransactionRequest.class);
+                batch.add(new RedisMessage<>(rawJson, request));
+            } catch (JsonProcessingException e) {
+                log.error("Failed to parse queue item JSON: {}", rawJson, e);
+                //Todo: Could move item to DLQ here
+            }
+        }
+
+        return batch;
     }
 
     private String serialize(TransactionRequest transaction) {
         try {
             return objectMapper.writeValueAsString(transaction);
         } catch (Exception e) {
-            throw new RuntimeException("Serialization failed", e);
+            throw new SerializationFailedException("Serialization failed", e);
         }
     }
 }

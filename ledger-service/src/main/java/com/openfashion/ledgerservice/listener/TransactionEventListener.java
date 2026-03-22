@@ -1,5 +1,6 @@
 package com.openfashion.ledgerservice.listener;
 
+import com.openfashion.ledgerservice.core.exceptions.DbTimeoutException;
 import com.openfashion.ledgerservice.core.exceptions.UnsupportedTransactionException;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
@@ -11,7 +12,6 @@ import io.confluent.parallelconsumer.ParallelStreamProcessor;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -32,9 +32,14 @@ public class TransactionEventListener {
     private final Map<TransactionType, LedgerStrategy> strategyMap = new EnumMap<>(TransactionType.class);
     private final LedgerBatchService ledgerBatchService;
 
-    @Order(1)
     @PostConstruct
     public void init() {
+        initStrategies();
+        startConsuming();
+    }
+
+
+    private void initStrategies() {
 
         log.info("Initializing Transaction Strategies...");
 
@@ -51,9 +56,7 @@ public class TransactionEventListener {
         log.info("Ledger Strategy Map initialized with {} strategies", strategyMap.size());
     }
 
-    @Order(2)
-    @PostConstruct
-    public void startConsuming() {
+    private void startConsuming() {
         parallelConsumer.subscribe(List.of("transaction.request"));
 
         parallelConsumer.poll(context -> {
@@ -92,7 +95,7 @@ public class TransactionEventListener {
             }
 
             if (!success) {
-                throw new RuntimeException("Db commit timeout - retrying batch");
+                throw new DbTimeoutException();
             }
         });
     }

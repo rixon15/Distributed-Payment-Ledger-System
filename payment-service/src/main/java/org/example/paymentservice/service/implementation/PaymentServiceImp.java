@@ -193,8 +193,6 @@ public class PaymentServiceImp implements PaymentService {
         payment.setStatus(PaymentStatus.MANUAL_REVIEW);
         payment.setErrorMessage(reason);
         payment.setUpdatedAt(LocalDateTime.now());
-        payment.setErrorMessage("Payment is flagged for manual review");
-
         paymentRepository.save(payment);
 
         //TODO: implement a way to handle the payments manually
@@ -202,7 +200,6 @@ public class PaymentServiceImp implements PaymentService {
                 OutboxEvent.builder()
                         .aggregateId(payment.getId().toString())
                         .eventType(payment.getType())
-                        .status(OutboxStatus.PENDING)
                         .payload(objectMapper.writeValueAsString(payment))
                         .createdAt(Instant.now())
                         .build()

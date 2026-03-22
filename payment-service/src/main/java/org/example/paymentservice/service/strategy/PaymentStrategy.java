@@ -61,7 +61,6 @@ public abstract class PaymentStrategy {
                     .aggregateId(payment.getUserId().toString())
                     .eventType(payment.getType())
                     .payload(jsonPayload)
-                    .status(OutboxStatus.PROCESSED)
                     .createdAt(Instant.now())
                     .build();
 

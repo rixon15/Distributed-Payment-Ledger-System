@@ -47,6 +47,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
     }
 
     @Override
+    @Transactional
     public void saveTransactions(List<TransactionRequest> batch) {
         Set<UUID> referenceIds = batch.stream()
                 .map(TransactionRequest::getReferenceId)
@@ -167,7 +168,6 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
                 .aggregateId(aggregateKey.toString()) // Critical for Debezium Kafka Key
                 .eventType(req.getType())
                 .payload(serialize(resultEvent))
-                .status(OutboxStatus.PROCESSED)
                 .createdAt(Instant.now())
                 .build();
     }

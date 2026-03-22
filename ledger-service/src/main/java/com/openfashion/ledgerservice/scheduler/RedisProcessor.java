@@ -1,6 +1,7 @@
 package com.openfashion.ledgerservice.scheduler;
 
 import com.openfashion.ledgerservice.dto.TransactionRequest;
+import com.openfashion.ledgerservice.dto.redis.RedisMessage;
 import com.openfashion.ledgerservice.service.LedgerBatchService;
 import com.openfashion.ledgerservice.service.RedisService;
 import lombok.RequiredArgsConstructor;
@@ -18,12 +19,16 @@ public class RedisProcessor {
 
     @Scheduled(fixedDelay = 500)
     public void processQueue() {
-        List<TransactionRequest> dbBatch = redisService.popFromQueue(100);
-        if(dbBatch.isEmpty()) return;
+        List<RedisMessage<TransactionRequest>> messages = redisService.popFromQueue(100);
+        if (messages.isEmpty()) return;
+
+        List<TransactionRequest> dbBatch = messages.stream()
+                .map(RedisMessage::data)
+                .toList();
 
         ledgerBatchService.saveTransactions(dbBatch);
 
-        redisService.signalConfirmation(dbBatch);
+        redisService.signalConfirmation(messages);
 
     }
 
