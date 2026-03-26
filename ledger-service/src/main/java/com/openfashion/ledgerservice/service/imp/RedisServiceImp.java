@@ -1,9 +1,10 @@
 package com.openfashion.ledgerservice.service.imp;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
-import com.openfashion.ledgerservice.dto.redis.RedisMessage;
+import com.openfashion.ledgerservice.dto.consumer.BatchToken;
+import com.openfashion.ledgerservice.dto.redis.AckResult;
+import com.openfashion.ledgerservice.dto.redis.StreamEnvelope;
 import com.openfashion.ledgerservice.model.Account;
 import com.openfashion.ledgerservice.service.RedisService;
 import io.lettuce.core.RedisException;
@@ -12,6 +13,9 @@ import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.serializer.support.SerializationFailedException;
+import org.springframework.dao.DataAccessException;
+import org.springframework.data.domain.Range;
+import org.springframework.data.redis.connection.stream.*;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -20,13 +24,13 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
 import java.math.BigDecimal;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 
 @Service
 @RequiredArgsConstructor
@@ -39,8 +43,63 @@ public class RedisServiceImp implements RedisService {
     private static final String IDEMPOTENCY_KEY = "ledger:idempotency:set";
     private static final String DB_SNAPSHOT_KEY = "ledger:db:snapshot";
     private static final String PENDING_DELTA_KEY = "ledger:pending:delta";
-    private static final String QUEUE_KEY = "ledger:queue";
-    private static final String PROCESSING_KEY = "ledger:queue:processing";
+
+    private static final String STREAM_KEY = "ledger:stream:tx";
+    private static final String STREAM_GROUP = "ledger-stream-group";
+    private static final String DLQ_STREAM_KEY = "ledger:stream:tx:dlq";
+    private static final String BATCH_META_PREFIX = "ledger:batch:meta:";
+    private static final String BATCH_DONE_STREAM = "ledger:stream:batch:done";
+    private static final Duration BATCH_META_TTL = Duration.ofMinutes(10);
+
+    private static final String BATCH_ID_FIELD = "batchId";
+    private static final String STATUS_FIELD = "status";
+    private static final String DONE_STATUS = "DONE";
+    private static final Duration MAX_AWAIT_BLOCK_SLICE = Duration.ofSeconds(1);
+
+    private String consumerName;
+    private static final String PAYLOAD = "payload";
+
+    private static final String MARK_PROGRESS_SCRIPT = """
+            -- KEYS[1]=batchMetaKey, KEYS[2]=batchDoneStream
+            -- ARGV[1]=batchId, ARGV[2]=ackedCount
+            local processed = tonumber(redis.call('HINCRBY', KEYS[1], 'processed', ARGV[2]))
+            local expected = tonumber(redis.call('HGET', KEYS[1], 'expected') or '0')
+            local status = redis.call('HGET', KEYS[1], 'status') or 'PENDING'
+            
+            if expected > 0 and processed >= expected and status ~= 'DONE' then
+                redis.call('HSET', KEYS[1], 'status', 'DONE')
+                redis.call('XADD', KEYS[2], '*',
+                    'batchId', ARGV[1],
+                    'status', 'DONE',
+                    'processed', tostring(processed),
+                    'expected', tostring(expected))
+                return 1
+            end
+            
+            return 0
+            """;
+
+    private static final String SET_EXPECTED_SCRIPT = """
+            -- KEYS[1]=batchMetaKey, KEYS[2]=batchDoneStream
+            -- ARGV[1]=batchId, ARGV[2]=expectedCount
+            local expected = tonumber(ARGV[2])
+            redis.call('HSET', KEYS[1], 'expected', ARGV[2])
+            
+            local processed = tonumber(redis.call('HGET', KEYS[1], 'processed') or '0')
+            local status = redis.call('HGET', KEYS[1], 'status') or 'PENDING'
+            
+            if status ~= 'DONE' and (expected == 0 or (expected > 0 and processed >= expected)) then
+                redis.call('HSET', KEYS[1], 'status', 'DONE')
+                redis.call('XADD', KEYS[2], '*',
+                    'batchId', ARGV[1],
+                    'status', 'DONE',
+                    'processed', tostring(processed),
+                    'expected', tostring(expected))
+                return 1
+            end
+            
+            return 0
+            """;
 
     private static final String LEDGER_SCRIPT = """
             if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 1 then
@@ -62,7 +121,7 @@ public class RedisServiceImp implements RedisService {
             redis.call('HINCRBYFLOAT', KEYS[3], ARGV[2], -amount)
             redis.call('HINCRBYFLOAT', KEYS[3], ARGV[4], amount)
             redis.call('SADD', KEYS[1], ARGV[1])
-            redis.call('RPUSH', KEYS[4], ARGV[5])
+            redis.call('XADD', KEYS[4], '*', 'payload', ARGV[5], 'idempotencyKey', ARGV[1], 'batchId', ARGV[7])
             
             return 'OK'
             """;
@@ -79,29 +138,66 @@ public class RedisServiceImp implements RedisService {
             new DefaultRedisScript<>(LEDGER_SCRIPT, String.class);
     private static final RedisScript<String> SETTLE_SPRING_SCRIPT =
             new DefaultRedisScript<>(SETTLE_SCRIPT, String.class);
+    private static final RedisScript<Long> MARK_PROGRESS_SPRING_SCRIPT =
+            new DefaultRedisScript<>(MARK_PROGRESS_SCRIPT, Long.class);
+    private static final RedisScript<Long> SET_EXPECTED_SPRING_SCRIPT =
+            new DefaultRedisScript<>(SET_EXPECTED_SCRIPT, Long.class);
 
     @PostConstruct
-    public void loadScript() {
+    public void init() {
+
+        try {
+            consumerName = InetAddress.getLocalHost().getHostName() + "-" + ProcessHandle.current().pid();
+        } catch (UnknownHostException _) {
+            consumerName = "ledger-consumer-" + UUID.randomUUID().toString().substring(0, 8);
+            log.warn("Failed to generate hostname-based consumer name, using fallback: {}", consumerName);
+        }
+
+        log.info("Consumer name initialized: {}", consumerName);
+
         balanceTemplate.execute((RedisCallback<String>) connection ->
                 connection.scriptingCommands().scriptLoad(LEDGER_SCRIPT.getBytes(StandardCharsets.UTF_8))
         );
-
-        balanceTemplate.execute((RedisCallback<String>) conncetion ->
-                conncetion.scriptingCommands().scriptLoad(SETTLE_SCRIPT.getBytes(StandardCharsets.UTF_8))
+        balanceTemplate.execute((RedisCallback<String>) connection ->
+                connection.scriptingCommands().scriptLoad(SETTLE_SCRIPT.getBytes(StandardCharsets.UTF_8))
         );
+        balanceTemplate.execute((RedisCallback<String>) connection ->
+                connection.scriptingCommands().scriptLoad(MARK_PROGRESS_SCRIPT.getBytes(StandardCharsets.UTF_8))
+        );
+        balanceTemplate.execute((RedisCallback<String>) connection ->
+                connection.scriptingCommands().scriptLoad(SET_EXPECTED_SCRIPT.getBytes(StandardCharsets.UTF_8))
+        );
+
+        try {
+            balanceTemplate.execute((RedisCallback<String>) connection -> {
+                connection.streamCommands().xGroupCreate(STREAM_KEY.getBytes(StandardCharsets.UTF_8),
+                        STREAM_GROUP,
+                        ReadOffset.from("0"),
+                        true);
+                return "OK";
+            });
+            log.info("Stream consumer group created: {}", STREAM_GROUP);
+        } catch (Exception e) {
+            if (!e.getMessage().contains("BUSYGROUP")) {
+                log.warn("Unexpected error creating consumer group (will continue if BUSYGROUP): {}", e.getMessage());
+            } else {
+                log.info("Consumer group already exists: {}", STREAM_GROUP);
+            }
+        }
+
 
         log.info("Ledger Lua scripts loaded with SHA");
     }
 
     @Override
-    public Map<String, List<TransactionRequest>> processBatchAtomic(List<TransactionRequest> batch) {
+    public Map<String, List<TransactionRequest>> processBatchAtomic(List<TransactionRequest> batch, String batchId) {
 
         List<TransactionRequest> okList = new ArrayList<>();
         List<TransactionRequest> nsfList = new ArrayList<>();
 
         List<Object> results = balanceTemplate.executePipelined(new SessionCallback<>() {
             @Override
-            public Object execute(@NonNull RedisOperations operations) throws org.springframework.dao.DataAccessException {
+            public Object execute(@NonNull RedisOperations operations) throws DataAccessException {
                 for (TransactionRequest request : batch) {
 
                     boolean checkNsf = switch (request.getType()) {
@@ -114,13 +210,14 @@ public class RedisServiceImp implements RedisService {
 
                     operations.execute(
                             LEDGER_SPRING_SCRIPT,
-                            List.of(IDEMPOTENCY_KEY, DB_SNAPSHOT_KEY, PENDING_DELTA_KEY, QUEUE_KEY),
+                            List.of(IDEMPOTENCY_KEY, DB_SNAPSHOT_KEY, PENDING_DELTA_KEY, STREAM_KEY),
                             compositeIdempotencyKey,
                             request.getDebitAccountId().toString(),
                             request.getAmount().toPlainString(),
                             request.getCreditAccountId().toString(),
                             serialize(request),
-                            checkNsfStr
+                            checkNsfStr,
+                            batchId
                     );
                 }
                 return null;
@@ -147,54 +244,304 @@ public class RedisServiceImp implements RedisService {
     }
 
     @Override
-    public boolean waitForPersistence(List<TransactionRequest> batch, Duration timeout) {
-        long end = System.currentTimeMillis() + timeout.toMillis();
+    public List<StreamEnvelope<TransactionRequest>> readNewFromStream(int count, Duration block) {
+        List<StreamEnvelope<TransactionRequest>> envelopes = new ArrayList<>();
 
-        while (System.currentTimeMillis() < end) {
-            if (allConfirmed(batch)) {
-                List<String> confirmationKeys = batch.stream()
-                        .map(this::buildConfirmationKey)
-                        .toList();
-                balanceTemplate.delete(confirmationKeys);
-                return true;
+        try {
+            List<MapRecord<String, Object, Object>> messages = balanceTemplate.opsForStream().read(
+                    Consumer.from(STREAM_GROUP, consumerName),
+                    StreamReadOptions.empty().count(count).block(block),
+                    StreamOffset.create(STREAM_KEY, ReadOffset.lastConsumed())
+            );
+
+            if (messages == null || messages.isEmpty()) {
+                return envelopes;
+            }
+
+            for (MapRecord<String, Object, Object> entry : messages) {
+                String streamId = entry.getId().toString();
+                String batchId = asString(entry.getValue().get(BATCH_ID_FIELD));
+
+
+                try {
+
+                    TransactionRequest request = parsePayload(entry);
+                    envelopes.add(new StreamEnvelope<>(streamId, batchId, asString(entry.getValue().get(PAYLOAD)), request, 1));
+
+                    log.debug("Parsed stream record {}: referenceId={}", streamId, request.getReferenceId());
+
+                } catch (Exception e) {
+                    log.error("Failed to parse stream record: {}", entry.getId().getValue(), e);
+                    moveToDlqAndAck(
+                            new StreamEnvelope<>(streamId, batchId, asString(entry.getValue().get(PAYLOAD)), null, 1),
+                            "PARSE_ERROR: " + e.getMessage()
+                    );
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error reading from stream: {}", e.getMessage(), e);
+        }
+
+        return envelopes;
+    }
+
+    private String asString(Object value) {
+        return switch (value) {
+            case null -> null;
+            case String s -> s;
+            case byte[] bytes -> new String(bytes, StandardCharsets.UTF_8);
+            default -> String.valueOf(value);
+        };
+    }
+
+    private TransactionRequest parsePayload(MapRecord<String, Object, Object> entry) throws IOException {
+        String payloadJson = asString(entry.getValue().get(PAYLOAD));
+        if (payloadJson == null || payloadJson.isBlank()) {
+            throw new IllegalArgumentException("Missing payload for stream entry " + entry.getId().getValue());
+        }
+        return objectMapper.readValue(payloadJson, TransactionRequest.class);
+    }
+
+    @Override
+    public List<StreamEnvelope<TransactionRequest>> claimStaleFromStream(int count, Duration minIdle) {
+        List<StreamEnvelope<TransactionRequest>> envelopes = new ArrayList<>();
+
+        PendingMessages pendingMessages = balanceTemplate.opsForStream().pending(
+                STREAM_KEY,
+                STREAM_GROUP,
+                Range.unbounded(),
+                count
+        );
+
+        if (pendingMessages == null || pendingMessages.isEmpty()) {
+            return envelopes;
+        }
+
+
+        List<RecordId> staleIds = pendingMessages.stream()
+                .filter(msg -> msg.getElapsedTimeSinceLastDelivery().compareTo(minIdle) >= 0)
+                .map(PendingMessage::getId)
+                .toList();
+
+        if (staleIds.isEmpty()) {
+            return envelopes;
+        }
+
+        List<MapRecord<String, Object, Object>> claimed = balanceTemplate.opsForStream().claim(
+                STREAM_KEY,
+                STREAM_GROUP,
+                consumerName,
+                minIdle,
+                staleIds.toArray(RecordId[]::new)
+        );
+
+        for (MapRecord<String, Object, Object> entry : claimed) {
+            String streamId = entry.getId().getValue();
+            String payloadJson = asString(entry.getValue().get(PAYLOAD));
+            String batchId = asString(entry.getValue().get(BATCH_ID_FIELD));
+
+            if (payloadJson == null) {
+                moveToDlqAndAck(
+                        new StreamEnvelope<>(streamId, batchId, null, null, 1),
+                        "MISSING_PAYLOAD_STALE"
+                );
+
+                continue;
             }
 
             try {
-                Thread.sleep(100);
-            } catch (InterruptedException _) {
-                Thread.currentThread().interrupt();
+                TransactionRequest request = objectMapper.readValue(payloadJson, TransactionRequest.class);
+                envelopes.add(new StreamEnvelope<>(streamId, batchId, payloadJson, request, 1));
+                log.debug("Claimed stale stream record {}: referenceId={}", streamId, request);
+            } catch (Exception e) {
+                moveToDlqAndAck(
+                        new StreamEnvelope<>(streamId, batchId, payloadJson, null, 1),
+                        "PARSE_ERROR_STALE: " + e.getMessage()
+                );
+                log.error("Failed to parse claimed stale stream record: {}", streamId, e);
+            }
+
+        }
+
+        return envelopes;
+    }
+
+    @Override
+    public AckResult acknowledgePersisted(List<StreamEnvelope<TransactionRequest>> batch) {
+        if (batch.isEmpty()) return new AckResult(0, 0, List.of(), true, null);
+
+        List<RecordId> recordIds = batch.stream()
+                .map(env -> RecordId.of(env.streamId()))
+                .toList();
+
+        try {
+
+            Long ackCountObj = balanceTemplate.opsForStream().acknowledge(STREAM_KEY, STREAM_GROUP, recordIds.toArray(RecordId[]::new));
+            log.debug("Acknowledged {} stream entries", ackCountObj);
+
+            int requested = recordIds.size();
+            int acked = ackCountObj == null ? 0 : ackCountObj.intValue();
+
+            if (acked != requested) {
+                List<String> ids = batch.stream().map(StreamEnvelope::streamId).toList();
+                return new AckResult(requested, acked, ids, false, "Partial XACK");
+            }
+
+            batch.forEach(env -> {
+                if (env.data() != null) {
+                    String confirmationKey = buildConfirmationKey(env.data());
+                    balanceTemplate.opsForValue().set(confirmationKey, "true", Duration.ofSeconds(60));
+                }
+            });
+
+            return new AckResult(requested, acked, List.of(), true, null);
+        } catch (Exception e) {
+            log.error("Error acknowledging stream entries", e);
+
+            return new AckResult(recordIds.size(), 0,
+                    batch.stream().map(StreamEnvelope::streamId).toList(),
+                    false, e.getMessage());
+        }
+    }
+
+    @Override
+    public void moveToDlqAndAck(StreamEnvelope<TransactionRequest> failed, String reason) {
+        try {
+            balanceTemplate.opsForStream().add(
+                    DLQ_STREAM_KEY,
+                    Map.of(
+                            "streamId", failed.streamId(),
+                            PAYLOAD, failed.rawJson() != null ? failed.rawJson() : "null",
+                            "reason", reason,
+                            "timestamp", System.currentTimeMillis() + ""
+                    )
+            );
+            log.warn("Moved stream record {} to DLQ: {}", failed.streamId(), reason);
+
+            balanceTemplate.opsForStream().acknowledge(STREAM_KEY, STREAM_GROUP, RecordId.of(failed.streamId()));
+            log.debug("Acknowledged failed entry {}", failed.streamId());
+        } catch (Exception e) {
+            log.error("Error moving record to DLQ: {}", failed.streamId(), e);
+        }
+    }
+
+    @Override
+    public void markBatchProgress(String batchId, int ackedCount) {
+
+        if (ackedCount <= 0) {
+            return;
+        }
+
+        String key = BATCH_META_PREFIX + batchId;
+
+        balanceTemplate.execute(
+                MARK_PROGRESS_SPRING_SCRIPT,
+                List.of(key, BATCH_DONE_STREAM),
+                batchId,
+                String.valueOf(ackedCount)
+        );
+
+        balanceTemplate.expire(key, BATCH_META_TTL);
+
+    }
+
+    @Override
+    public boolean awaitBatchCompletion(String batchId, Duration timeout) {
+
+        String metaKey = batchMetaKey(batchId);
+        long deadlineNanos = System.nanoTime() + timeout.toNanos();
+
+        if (isBatchDone(metaKey)) {
+            return true;
+        }
+
+        while (System.nanoTime() < deadlineNanos) {
+            long remainingNanos = deadlineNanos - System.nanoTime();
+
+            if (remainingNanos <= 0) {
                 return false;
             }
+
+            Duration remaining = Duration.ofNanos(remainingNanos);
+            Duration block = remaining.compareTo(MAX_AWAIT_BLOCK_SLICE) > 0 ? MAX_AWAIT_BLOCK_SLICE : remaining;
+
+            List<MapRecord<String, Object, Object>> events = balanceTemplate.opsForStream().read(
+                    StreamReadOptions.empty().count(100).block(block),
+                    StreamOffset.create(BATCH_DONE_STREAM, ReadOffset.latest())
+            );
+
+            // Re-check hash status every loop. This prevents missed event-edge cases
+            if (isBatchDone(metaKey)) {
+                return true;
+            }
+
+            if (events == null || events.isEmpty()) {
+                continue;
+            }
+
+            for (MapRecord<String, Object, Object> event : events) {
+                String eventBatchId = asString(event.getValue().get(BATCH_ID_FIELD));
+                String eventStatus = asString(event.getValue().get(STATUS_FIELD));
+
+                if (batchId.equals(eventBatchId) && DONE_STATUS.equals(eventStatus)) {
+                    return true;
+                }
+            }
         }
+
         return false;
     }
 
-    public void signalConfirmation(List<RedisMessage<TransactionRequest>> messages) {
+    @Override
+    public BatchToken createBatchToken() {
+        String batchId = UUID.randomUUID().toString();
+        String key = batchMetaKey(batchId);
 
-        balanceTemplate.executePipelined((RedisCallback<Object>) connection -> {
+        balanceTemplate.opsForHash().putAll(key, Map.of(
+                "expected", "0",
+                "processed", "0",
+                STATUS_FIELD, "PENDING"
+        ));
 
-            byte[] processingKeyBytes = PROCESSING_KEY.getBytes(StandardCharsets.UTF_8);
-            byte[] trueBytes = "true".getBytes(StandardCharsets.UTF_8);
+        balanceTemplate.expire(key, BATCH_META_TTL);
 
-            for (RedisMessage<TransactionRequest> msg : messages) {
-                TransactionRequest requests = msg.data();
+        return new BatchToken(batchId, 0);
+    }
 
-                String confirmationKey = buildConfirmationKey(requests);
-                connection.stringCommands().setEx(confirmationKey.getBytes(StandardCharsets.UTF_8), 60, trueBytes);
+    @Override
+    public void setBatchExpectedCount(String batchId, int expectedCount) {
 
-                byte[] rawValueBytes = msg.rawJson().getBytes(StandardCharsets.UTF_8);
-                connection.listCommands().lRem(processingKeyBytes, 1, rawValueBytes);
-            }
+        if (expectedCount < 0) {
+            throw new IllegalArgumentException("expected Count must be >= 0");
+        }
 
-            return null;
-        });
+        String key = batchMetaKey(batchId);
+
+        balanceTemplate.execute(
+                SET_EXPECTED_SPRING_SCRIPT,
+                List.of(key, BATCH_DONE_STREAM),
+                batchId,
+                String.valueOf(expectedCount)
+        );
+
+        balanceTemplate.expire(key, BATCH_META_TTL);
+    }
+
+    private boolean isBatchDone(String metaKey) {
+        String currentStatus = asString(balanceTemplate.opsForHash().get(metaKey, STATUS_FIELD));
+        return DONE_STATUS.equals(currentStatus);
+    }
+
+    private String batchMetaKey(String batchId) {
+        return BATCH_META_PREFIX + batchId;
     }
 
     private String buildConfirmationKey(TransactionRequest request) {
         return "confirmed:" + request.getReferenceId().toString() + "-" + request.getType().name();
     }
 
-    private void handleScriptResult(String result, TransactionRequest request, List<TransactionRequest> okList, List<TransactionRequest> nsfList) {
+    private void handleScriptResult(String result, TransactionRequest
+            request, List<TransactionRequest> okList, List<TransactionRequest> nsfList) {
         switch (result) {
             case "OK":
                 okList.add(request);
@@ -208,44 +555,6 @@ public class RedisServiceImp implements RedisService {
             default:
                 throw new RedisException("Unexpected Redis response: " + result);
         }
-    }
-
-    private boolean allConfirmed(List<TransactionRequest> batch) {
-        List<String> confirmationKeys = batch.stream()
-                .map(this::buildConfirmationKey)
-                .toList();
-
-        List<String> results = balanceTemplate.opsForValue().multiGet(confirmationKeys);
-
-        if (results == null || results.isEmpty()) return false;
-
-        for (String result : results) {
-            if (!"true".equals(result)) return false;
-        }
-        return true;
-    }
-
-    @Override
-    public List<RedisMessage<TransactionRequest>> popFromQueue(int batchSize) {
-
-        List<RedisMessage<TransactionRequest>> batch = new ArrayList<>();
-
-        for (int i = 0; i < batchSize; ++i) {
-
-            String rawJson = balanceTemplate.opsForList().rightPopAndLeftPush(QUEUE_KEY, PROCESSING_KEY);
-
-            if (rawJson == null) break;
-
-            try {
-                TransactionRequest request = objectMapper.readValue(rawJson, TransactionRequest.class);
-                batch.add(new RedisMessage<>(rawJson, request));
-            } catch (JsonProcessingException e) {
-                log.error("Failed to parse queue item JSON: {}", rawJson, e);
-                //Todo: Could move item to DLQ here
-            }
-        }
-
-        return batch;
     }
 
     private String serialize(TransactionRequest transaction) {
