@@ -68,7 +68,7 @@ public class RedisServiceImp implements RedisService {
             
             if expected > 0 and processed >= expected and status ~= 'DONE' then
                 redis.call('HSET', KEYS[1], 'status', 'DONE')
-                redis.call('XADD', KEYS[2], '*',
+                redis.call('XADD', KEYS[2], '*', 'MAXLEN', '~', '20000', '*',
                     'batchId', ARGV[1],
                     'status', 'DONE',
                     'processed', tostring(processed),
@@ -90,7 +90,7 @@ public class RedisServiceImp implements RedisService {
             
             if status ~= 'DONE' and (expected == 0 or (expected > 0 and processed >= expected)) then
                 redis.call('HSET', KEYS[1], 'status', 'DONE')
-                redis.call('XADD', KEYS[2], '*',
+                redis.call('XADD', KEYS[2], 'MAXLEN', '~', '20000', '*',
                     'batchId', ARGV[1],
                     'status', 'DONE',
                     'processed', tostring(processed),
@@ -178,7 +178,10 @@ public class RedisServiceImp implements RedisService {
             });
             log.info("Stream consumer group created: {}", STREAM_GROUP);
         } catch (Exception e) {
-            if (!e.getMessage().contains("BUSYGROUP")) {
+            String message = e.getMessage();
+
+
+            if (message != null && message.contains("BUSYGROUP")) {
                 log.warn("Unexpected error creating consumer group (will continue if BUSYGROUP): {}", e.getMessage());
             } else {
                 log.info("Consumer group already exists: {}", STREAM_GROUP);
@@ -317,11 +320,17 @@ public class RedisServiceImp implements RedisService {
             return envelopes;
         }
 
+        Map<String, Long> deliveryCountById = new HashMap<>();
+        List<RecordId> staleIds = new ArrayList<>();
 
-        List<RecordId> staleIds = pendingMessages.stream()
-                .filter(msg -> msg.getElapsedTimeSinceLastDelivery().compareTo(minIdle) >= 0)
-                .map(PendingMessage::getId)
-                .toList();
+        for (PendingMessage msg : pendingMessages) {
+            if (msg.getElapsedTimeSinceLastDelivery().compareTo(minIdle) >= 0) {
+                staleIds.add(msg.getId());
+
+                long deliveries = Math.max(1L, msg.getTotalDeliveryCount());
+                deliveryCountById.put(msg.getId().getValue(), deliveries);
+            }
+        }
 
         if (staleIds.isEmpty()) {
             return envelopes;
@@ -339,6 +348,7 @@ public class RedisServiceImp implements RedisService {
             String streamId = entry.getId().getValue();
             String payloadJson = asString(entry.getValue().get(PAYLOAD));
             String batchId = asString(entry.getValue().get(BATCH_ID_FIELD));
+            long deliveryCount = deliveryCountById.getOrDefault(streamId, 1L);
 
             if (payloadJson == null) {
                 moveToDlqAndAck(
@@ -351,11 +361,11 @@ public class RedisServiceImp implements RedisService {
 
             try {
                 TransactionRequest request = objectMapper.readValue(payloadJson, TransactionRequest.class);
-                envelopes.add(new StreamEnvelope<>(streamId, batchId, payloadJson, request, 1));
-                log.debug("Claimed stale stream record {}: referenceId={}", streamId, request);
+                envelopes.add(new StreamEnvelope<>(streamId, batchId, payloadJson, request, deliveryCount));
+                log.debug("Claimed stale stream record {}: referenceId = {}, deliveries = {}", streamId, request, deliveryCount);
             } catch (Exception e) {
                 moveToDlqAndAck(
-                        new StreamEnvelope<>(streamId, batchId, payloadJson, null, 1),
+                        new StreamEnvelope<>(streamId, batchId, payloadJson, null, deliveryCount),
                         "PARSE_ERROR_STALE: " + e.getMessage()
                 );
                 log.error("Failed to parse claimed stale stream record: {}", streamId, e);
@@ -383,16 +393,9 @@ public class RedisServiceImp implements RedisService {
             int acked = ackCountObj == null ? 0 : ackCountObj.intValue();
 
             if (acked != requested) {
-                List<String> ids = batch.stream().map(StreamEnvelope::streamId).toList();
-                return new AckResult(requested, acked, ids, false, "Partial XACK");
+                List<String> attemptedIds = batch.stream().map(StreamEnvelope::streamId).toList();
+                return new AckResult(requested, acked, attemptedIds, false, "Partial XACK");
             }
-
-            batch.forEach(env -> {
-                if (env.data() != null) {
-                    String confirmationKey = buildConfirmationKey(env.data());
-                    balanceTemplate.opsForValue().set(confirmationKey, "true", Duration.ofSeconds(60));
-                }
-            });
 
             return new AckResult(requested, acked, List.of(), true, null);
         } catch (Exception e) {
@@ -512,7 +515,7 @@ public class RedisServiceImp implements RedisService {
     public void setBatchExpectedCount(String batchId, int expectedCount) {
 
         if (expectedCount < 0) {
-            throw new IllegalArgumentException("expected Count must be >= 0");
+            throw new IllegalArgumentException("expectedCount must be >= 0");
         }
 
         String key = batchMetaKey(batchId);
@@ -534,10 +537,6 @@ public class RedisServiceImp implements RedisService {
 
     private String batchMetaKey(String batchId) {
         return BATCH_META_PREFIX + batchId;
-    }
-
-    private String buildConfirmationKey(TransactionRequest request) {
-        return "confirmed:" + request.getReferenceId().toString() + "-" + request.getType().name();
     }
 
     private void handleScriptResult(String result, TransactionRequest

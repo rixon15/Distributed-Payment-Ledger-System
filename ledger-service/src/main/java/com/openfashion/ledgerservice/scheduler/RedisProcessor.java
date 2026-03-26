@@ -60,7 +60,7 @@ public class RedisProcessor {
 
             markBatchProgress(messages);
 
-            log.debug("Processed {} stream entries (stale = {}, fresh = {}",
+            log.debug("Processed {} stream entries (stale = {}, fresh = {})",
                     messages.size(), stale.size(), fresh.size());
 
         } catch (Exception e) {
@@ -96,6 +96,8 @@ public class RedisProcessor {
                         message,
                         "RETRY_LIMIT_EXCEEDED attempts = " + message.deliveryCount() + " error = " + e.getMessage()
                 );
+
+                markBatchProgress(List.of(message));
 
                 log.error("Moved to DLQ after {} attempts. streamId = {}", message.deliveryCount(), message.streamId());
                 return;
