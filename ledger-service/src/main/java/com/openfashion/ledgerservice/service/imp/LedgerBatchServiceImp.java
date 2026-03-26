@@ -12,6 +12,7 @@ import com.openfashion.ledgerservice.service.RedisService;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
@@ -119,10 +120,14 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
             acc.setBalance(acc.getBalance().add(entry.getValue()));
         }
 
-        transactionRepository.saveAll(transactions);
-        postingRepository.saveAll(postings);
-        outboxRepository.saveAll(outboxEvents);
-        accountRepository.saveAll(accountMap.values());
+        try {
+            transactionRepository.saveAll(transactions);
+            postingRepository.saveAll(postings);
+            outboxRepository.saveAll(outboxEvents);
+            accountRepository.saveAll(accountMap.values());
+        } catch (DataIntegrityViolationException _) {
+            log.info("Batch contained already-processed transactions(crash recovery). Safely ignoring.");
+        }
 
         log.info("Persisted batch of {} transactions to Postgres.", newRequests.size());
     }

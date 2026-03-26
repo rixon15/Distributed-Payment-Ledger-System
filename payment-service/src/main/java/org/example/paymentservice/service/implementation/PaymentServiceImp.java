@@ -17,6 +17,7 @@ import org.example.paymentservice.simulator.riskengine.dto.RiskRequest;
 import org.example.paymentservice.simulator.riskengine.dto.RiskResponse;
 import org.example.paymentservice.simulator.riskengine.dto.RiskStatus;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -125,6 +126,9 @@ public class PaymentServiceImp implements PaymentService {
             }
 
             strategy.execute(payment, request);
+        } catch (DataIntegrityViolationException e) {
+            log.warn("Concurrent duplicate payment blocked by DB constraint for key: {}", request.idempotencyKey());
+            throw new DuplicatedRequestException(request.idempotencyKey());
         } catch (Exception e) {
             log.error("Payment processing failed for key: {}. Releasing Redis lock", request.idempotencyKey());
             throw e;
