@@ -3,10 +3,7 @@ package com.openfashion.ledgerservice.service.imp;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.event.TransactionResultEvent;
 import com.openfashion.ledgerservice.model.*;
-import com.openfashion.ledgerservice.repository.AccountRepository;
-import com.openfashion.ledgerservice.repository.OutboxRepository;
-import com.openfashion.ledgerservice.repository.PostingRepository;
-import com.openfashion.ledgerservice.repository.TransactionRepository;
+import com.openfashion.ledgerservice.repository.*;
 import com.openfashion.ledgerservice.service.LedgerBatchService;
 import com.openfashion.ledgerservice.service.RedisService;
 import jakarta.annotation.PostConstruct;
@@ -31,6 +28,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
     private final TransactionRepository transactionRepository;
     private final PostingRepository postingRepository;
     private final OutboxRepository outboxRepository;
+    private final TransactionBatchRepository transactionBatchRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
 
@@ -49,27 +47,8 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
     @Override
     @Transactional
     public void saveTransactions(List<TransactionRequest> batch) {
-        Set<UUID> referenceIds = batch.stream()
-                .map(TransactionRequest::getReferenceId)
-                .collect(Collectors.toSet());
-
-        List<Transaction> existingTransactions = transactionRepository.findAllByReferenceIdIn(referenceIds);
-
-        Set<String> existingKeys = existingTransactions.stream()
-                .map(tx -> tx.getReferenceId() + "-" + tx.getType().name())
-                .collect(Collectors.toSet());
-
-        List<TransactionRequest> newRequests = batch.stream()
-                .filter(req -> !existingKeys.contains(req.getReferenceId() + "-" + req.getType().name()))
-                .toList();
-
-        if (newRequests.isEmpty()) {
-            log.info("All {} transactions in batch already exists in DB. Skipping inserts", batch.size());
-            return;
-        }
-
         Set<UUID> accountIds = new HashSet<>();
-        for (TransactionRequest req : newRequests) {
+        for (TransactionRequest req : batch) {
             accountIds.add(req.getDebitAccountId());
             accountIds.add(req.getCreditAccountId());
         }
@@ -81,9 +60,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         List<Posting> postings = new ArrayList<>();
         List<OutboxEvent> outboxEvents = new ArrayList<>();
 
-        Map<UUID, BigDecimal> netChanges = new HashMap<>();
-
-        for (TransactionRequest req : newRequests) {
+        for (TransactionRequest req : batch) {
             Account debitAcc = accountMap.get(req.getDebitAccountId());
             Account creditAcc = accountMap.get(req.getCreditAccountId());
 
@@ -99,10 +76,6 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
             postings.add(new Posting(tx, debitAcc, req.getAmount(), PostingDirection.DEBIT));
             postings.add(new Posting(tx, creditAcc, req.getAmount(), PostingDirection.CREDIT));
 
-            netChanges.merge(debitAcc.getId(), req.getAmount().negate(), BigDecimal::add);
-            netChanges.merge(creditAcc.getId(), req.getAmount(), BigDecimal::add);
-
-            // Build Outbox Event (Keyed by Sender ID for downstream Parallel Consumer ordering)
             TransactionResultEvent resultEvent = createTransactionResultEvent(
                     req,
                     TransactionStatus.POSTED,
@@ -113,18 +86,10 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
             outboxEvents.add(createOutboxEvent(req, debitAcc.getId(), resultEvent));
         }
 
-        for (Map.Entry<UUID, BigDecimal> entry : netChanges.entrySet()) {
-            Account acc = accountMap.get(entry.getKey());
+        processBatch(transactions, postings, outboxEvents);
 
-            acc.setBalance(acc.getBalance().add(entry.getValue()));
-        }
 
-        transactionRepository.saveAll(transactions);
-        postingRepository.saveAll(postings);
-        outboxRepository.saveAll(outboxEvents);
-        accountRepository.saveAll(accountMap.values());
-
-        log.info("Persisted batch of {} transactions to Postgres.", newRequests.size());
+        log.info("Persisted batch of {} transactions to Postgres.", batch.size());
     }
 
     @Override
@@ -163,6 +128,47 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         transactionRepository.saveAll(transactions);
     }
 
+    public void processBatch(List<Transaction> transactions, List<Posting> postings, List<OutboxEvent> outboxEvents) {
+        int[] result = transactionBatchRepository.upsertTransactions(transactions);
+
+        List<UUID> successfulTransactionIds = new ArrayList<>();
+
+        for (int i = 0; i < result.length; i++) {
+            if (result[i] > 0) {
+                successfulTransactionIds.add(transactions.get(i).getReferenceId());
+            }
+        }
+
+        if (successfulTransactionIds.isEmpty()) {
+            log.info("Entire batch was already processed. Skipping downstream updates.");
+            return;
+        }
+
+        List<Posting> filteredPostings = postings.stream()
+                .filter(p -> successfulTransactionIds.contains(p.getTransaction().getReferenceId()))
+                .toList();
+        postingRepository.saveAll(filteredPostings);
+
+        List<OutboxEvent> filteredEvents = outboxEvents.stream()
+                .filter(e -> successfulTransactionIds.contains(UUID.fromString(e.getAggregateId())))
+                .toList();
+        outboxRepository.saveAll(filteredEvents);
+
+        transactionBatchRepository.updateAccountBalances(filteredPostings);
+
+        Map<UUID, BigDecimal> confirmedChanges = filteredPostings.stream()
+                .collect(Collectors.groupingBy(
+                        p -> p.getAccount().getId(),
+                        Collectors.reducing(
+                                BigDecimal.ZERO,
+                                p -> p.getDirection() == PostingDirection.CREDIT ? p.getAmount() : p.getAmount().negate(),
+                                BigDecimal::add
+                        )
+                ));
+
+        redisService.syncRedisBalances(confirmedChanges);
+    }
+
     private OutboxEvent createOutboxEvent(TransactionRequest req, UUID aggregateKey, TransactionResultEvent resultEvent) {
         return OutboxEvent.builder()
                 .aggregateId(aggregateKey.toString()) // Critical for Debezium Kafka Key
@@ -193,11 +199,13 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
 
     private Transaction createTransaction(TransactionRequest request, TransactionStatus status) {
         return Transaction.builder()
+                .id(UUID.randomUUID())
                 .referenceId(request.getReferenceId())
                 .type(request.getType())
                 .status(status)
                 .effectiveDate(Instant.now())
                 .metadata(serialize(request))
+                .createdAt(Instant.now())
                 .build();
     }
 }

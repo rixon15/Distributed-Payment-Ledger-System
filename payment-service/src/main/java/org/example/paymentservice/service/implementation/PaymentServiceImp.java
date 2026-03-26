@@ -17,6 +17,7 @@ import org.example.paymentservice.simulator.riskengine.dto.RiskRequest;
 import org.example.paymentservice.simulator.riskengine.dto.RiskResponse;
 import org.example.paymentservice.simulator.riskengine.dto.RiskStatus;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -79,40 +80,45 @@ public class PaymentServiceImp implements PaymentService {
             throw new InvalidTransferException("You cannot transfer money to your own account.");
         }
 
-        UUID receiverId;
-
-        if (request.type() == PaymentType.DEPOSIT || request.type() == PaymentType.WITHDRAWAL) {
-            receiverId = senderId;
-        } else {
-            receiverId = request.receiverId();
-        }
+        UUID receiverId = (request.type() == PaymentType.DEPOSIT ||
+                request.type() == PaymentType.WITHDRAWAL) ? senderId : request.receiverId();
 
         log.info("Processing payment request for user: {} with idempotencyKey: {}", senderId, request.idempotencyKey());
 
-        Optional<Payment> existingPayment = paymentRepository.findByIdempotencyKey(request.idempotencyKey());
-
-        if (existingPayment.isPresent()) {
+        paymentRepository.findByIdempotencyKey(request.idempotencyKey()).ifPresent(_ -> {
             log.warn("Payment already exists in the DB for key: {}", request.idempotencyKey());
             throw new DuplicatedRequestException("Payment already processed with key: " + request.idempotencyKey());
-        }
+        });
 
-
+        Payment payment;
 
         try {
+            payment = tx.execute(_ -> {
+                Payment newPayment = Payment.builder()
+                        .userId(senderId)
+                        .receiverId(receiverId)
+                        .type(request.type())
+                        .idempotencyKey(request.idempotencyKey())
+                        .amount(request.amount())
+                        .currency(CurrencyType.valueOf(request.currency().toUpperCase()))
+                        .status(PaymentStatus.PENDING)
+                        .createdAt(LocalDateTime.now())
+                        .build();
 
-            Payment payment = tx.execute(_ -> paymentRepository.save(
-                    Payment.builder()
-                            .userId(senderId)
-                            .receiverId(receiverId)
-                            .type(request.type())
-                            .idempotencyKey(request.idempotencyKey())
-                            .amount(request.amount())
-                            .currency(CurrencyType.valueOf(request.currency().toUpperCase()))
-                            .status(PaymentStatus.PENDING)
-                            .createdAt(LocalDateTime.now())
-                            .build()
-            ));
+                return paymentRepository.saveAndFlush(newPayment);
+            });
 
+        } catch (DataIntegrityViolationException e) {
+            if (isIdempotencyConstraintViolation(e)) {
+                log.warn("Concurrent duplicate payment blocked by DB constraint for key: {}", request.idempotencyKey());
+                throw new DuplicatedRequestException(request.idempotencyKey());
+            }
+
+            log.error("Database integrity violation while persisting initial payment record.");
+            throw e;
+        }
+
+        try {
             RiskResponse riskResult = checkRisk(senderId, request);
             if (riskResult.status() == RiskStatus.REJECTED) {
                 handleRiskFailure(payment, riskResult.reason());
@@ -126,9 +132,10 @@ public class PaymentServiceImp implements PaymentService {
 
             strategy.execute(payment, request);
         } catch (Exception e) {
-            log.error("Payment processing failed for key: {}. Releasing Redis lock", request.idempotencyKey());
+            log.error("Payment processing business logic failed for key: {}. Releasing Redis lock", request.idempotencyKey(), e);
             throw e;
         }
+
     }
 
     @Override
@@ -160,6 +167,13 @@ public class PaymentServiceImp implements PaymentService {
         }
 
         strategy.execute(payment, request);
+    }
+
+    private boolean isIdempotencyConstraintViolation(DataIntegrityViolationException e) {
+        String rootMessage = e.getMostSpecificCause().getMessage();
+        // '23505' is the Postgres SQLState for unique violation
+        return rootMessage != null &&
+                (rootMessage.contains("23505") || rootMessage.contains("uc_payments_idempotency_key"));
     }
 
     private RiskResponse checkRisk(UUID senderId, PaymentRequest request) {

@@ -20,11 +20,13 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -65,14 +67,27 @@ public class RedisServiceImp implements RedisService {
             return 'OK'
             """;
 
+    private static final String SETTLE_SCRIPT = """
+            -- KEYS[1]: DB_SNAPSHOT_KEY, KEYS[2]: PENDING_DELTA_KEY
+            -- ARGV[1]: Account ID, ARGV[2]: Amount to settle
+            redis.call('HINCRBYFLOAT', KEYS[1], ARGV[1], ARGV[2])
+            redis.call('HINCRBYFLOAT', KEYS[2], ARGV[1], -ARGV[2])
+            return 'OK'
+            """;
 
     private static final RedisScript<String> LEDGER_SPRING_SCRIPT =
             new DefaultRedisScript<>(LEDGER_SCRIPT, String.class);
+    private static final RedisScript<String> SETTLE_SPRING_SCRIPT =
+            new DefaultRedisScript<>(SETTLE_SCRIPT, String.class);
 
     @PostConstruct
     public void loadScript() {
         balanceTemplate.execute((RedisCallback<String>) connection ->
                 connection.scriptingCommands().scriptLoad(LEDGER_SCRIPT.getBytes(StandardCharsets.UTF_8))
+        );
+
+        balanceTemplate.execute((RedisCallback<String>) conncetion ->
+                conncetion.scriptingCommands().scriptLoad(SETTLE_SCRIPT.getBytes(StandardCharsets.UTF_8))
         );
 
         log.info("Ledger Lua scripts loaded with SHA");
@@ -239,5 +254,25 @@ public class RedisServiceImp implements RedisService {
         } catch (Exception e) {
             throw new SerializationFailedException("Serialization failed", e);
         }
+    }
+
+    @Override
+    public void syncRedisBalances(Map<UUID, BigDecimal> netChanges) {
+        if (netChanges.isEmpty()) return;
+
+        balanceTemplate.executePipelined(new SessionCallback<>() {
+            @Override
+            public Object execute(@NonNull RedisOperations operations) {
+                netChanges.forEach((accountId, delta) ->
+                        operations.execute(
+                                SETTLE_SPRING_SCRIPT,
+                                List.of(DB_SNAPSHOT_KEY, PENDING_DELTA_KEY),
+                                accountId.toString(),
+                                delta.toPlainString()
+                        ));
+
+                return null;
+            }
+        });
     }
 }
