@@ -24,7 +24,7 @@ CREATE TABLE payments
     version                 BIGINT
 );
 
-ALTER TABLE payments ADD CONSTRAINT uc_payments_idempotencykey UNIQUE (idempotency_key);
+ALTER TABLE payments ADD CONSTRAINT uc_payments_idempotency_key UNIQUE (idempotency_key);
 
 CREATE INDEX idx_payment_user ON payments (user_id);
 CREATE INDEX idx_outbox_events_aggregate_id ON outbox_events (aggregate_id);
