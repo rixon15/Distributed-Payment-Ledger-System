@@ -129,29 +129,36 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
     }
 
     public void processBatch(List<Transaction> transactions, List<Posting> postings, List<OutboxEvent> outboxEvents) {
-        int[] result = transactionBatchRepository.upsertTransactions(transactions);
 
-        List<UUID> successfulTransactionIds = new ArrayList<>();
+        int[] upsertResult = transactionBatchRepository.upsertTransactions(transactions);
 
-        for (int i = 0; i < result.length; i++) {
-            if (result[i] > 0) {
-                successfulTransactionIds.add(transactions.get(i).getReferenceId());
-            }
-        }
+        // Collect positions (indices), not values.
+        List<Integer> successfulIndices = java.util.stream.IntStream.range(0, upsertResult.length)
+                .filter(i -> upsertResult[i] > 0)
+                .boxed()
+                .toList();
 
-        if (successfulTransactionIds.isEmpty()) {
+
+        if (successfulIndices.isEmpty()) {
             log.info("Entire batch was already processed. Skipping downstream updates.");
             return;
         }
 
+        Set<UUID> successfulReferenceIds = successfulIndices.stream()
+                .map(i -> transactions.get(i).getReferenceId())
+                .collect(Collectors.toSet());
+
         List<Posting> filteredPostings = postings.stream()
-                .filter(p -> successfulTransactionIds.contains(p.getTransaction().getReferenceId()))
+                .filter(p -> successfulReferenceIds.contains(p.getTransaction().getReferenceId()))
                 .toList();
         postingRepository.saveAll(filteredPostings);
 
-        List<OutboxEvent> filteredEvents = outboxEvents.stream()
-                .filter(e -> successfulTransactionIds.contains(UUID.fromString(e.getAggregateId())))
+        List<OutboxEvent> filteredEvents = successfulIndices.stream()
+                .filter(i -> i >= 0 && i < outboxEvents.size())
+                .map(outboxEvents::get)
                 .toList();
+
+        log.info("Saving {} outbox events for {} successful transactions", filteredEvents.size(), successfulIndices.size());
         outboxRepository.saveAll(filteredEvents);
 
         transactionBatchRepository.updateAccountBalances(filteredPostings);

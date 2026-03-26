@@ -3,6 +3,7 @@ package com.openfashion.ledgerservice.listener;
 import com.openfashion.ledgerservice.core.exceptions.DbTimeoutException;
 import com.openfashion.ledgerservice.core.exceptions.UnsupportedTransactionException;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
+import com.openfashion.ledgerservice.dto.consumer.BatchToken;
 import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
 import com.openfashion.ledgerservice.model.TransactionType;
 import com.openfashion.ledgerservice.service.LedgerBatchService;
@@ -83,15 +84,23 @@ public class TransactionEventListener {
 
             log.info("Processing Kafka batch of size: {}", batch.size());
 
-            Map<String, List<TransactionRequest>> results = redisService.processBatchAtomic(batch);
+            BatchToken token = redisService.createBatchToken();
+
+            Map<String, List<TransactionRequest>> results = redisService.processBatchAtomic(batch, token.batchId());
+
+            int okCount = results.getOrDefault("ok", List.of()).size();
+
+            redisService.setBatchExpectedCount(token.batchId(), okCount);
+
 
             ledgerBatchService.persistRejectedNsf(results.get("nsf"));
 
+
             boolean success = true;
 
-            if (!results.get("ok").isEmpty()) {
+            if (okCount > 0) {
                 // High-load timeout (30s)
-                success = redisService.waitForPersistence(results.get("ok"), Duration.ofSeconds(30));
+                success = redisService.awaitBatchCompletion(token.batchId(), Duration.ofSeconds(30));
             }
 
             if (!success) {
