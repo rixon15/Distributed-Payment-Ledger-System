@@ -14,16 +14,16 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
+/**
+ * Repository for ledger accounts used by strategy resolution and balance-related lookups.
+ *
+ * <p>This repository serves both user-owned accounts and named system accounts
+ * such as liquidity or pending-withdrawal accounts.
+ */
 @Repository
 public interface AccountRepository extends JpaRepository<Account, UUID> {
 
     Optional<Account> findByUserIdAndCurrency(UUID userId, CurrencyType currency);
     Optional<Account> findByNameAndCurrency(String name, CurrencyType currency);
 
-    @Modifying
-    @Query("UPDATE Account a SET a.balance = a.balance + :change WHERE a.id = :id")
-    void updateBalance(@Param("id") UUID id, @Param("change") BigDecimal change);
-
-    @Query("SELECT a FROM Account a WHERE a.id IN :ids OR a.userId IN :ids")
-    List<Account> findAllByIdOrUserIdIn(@Param("ids") Set<UUID> ids);
 }

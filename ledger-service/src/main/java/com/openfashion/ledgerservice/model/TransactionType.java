@@ -1,5 +1,8 @@
 package com.openfashion.ledgerservice.model;
 
+/**
+ * Supported ledger business transaction types, including multi-stage withdrawal legs.
+ */
 public enum TransactionType {
 
     /**

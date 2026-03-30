@@ -4,6 +4,11 @@ import lombok.Getter;
 
 import java.util.Currency;
 
+/**
+ * Supported ledger currencies.
+ *
+ * <p>Wraps an ISO-like currency code and provides conversion to {@link java.util.Currency}.
+ */
 @Getter
 public enum CurrencyType {
     USD("USD"),
@@ -15,9 +20,4 @@ public enum CurrencyType {
     CurrencyType(String code) {
         this.code = code;
     }
-
-    public Currency toJavaCurrency() {
-        return Currency.getInstance(code);
-    }
-
 }

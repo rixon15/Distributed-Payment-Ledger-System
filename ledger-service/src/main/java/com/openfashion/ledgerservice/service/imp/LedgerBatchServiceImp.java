@@ -17,6 +17,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 
 /**
@@ -171,7 +172,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         int[] upsertResult = transactionBatchRepository.upsertTransactions(transactions);
 
         // Collect positions (indices), not values.
-        List<Integer> successfulIndices = java.util.stream.IntStream.range(0, upsertResult.length)
+        List<Integer> successfulIndices = IntStream.range(0, upsertResult.length)
                 .filter(i -> upsertResult[i] > 0)
                 .boxed()
                 .toList();
