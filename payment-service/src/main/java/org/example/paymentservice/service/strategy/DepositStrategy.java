@@ -17,6 +17,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Strategy for external deposits.
+ *
+ * <p>Calls bank simulation API and marks payment as AUTHORIZED on approval,
+ * otherwise fails and emits failure outbox state.
+ */
 @Component
 @Slf4j
 public class DepositStrategy extends PaymentStrategy {
@@ -32,11 +38,17 @@ public class DepositStrategy extends PaymentStrategy {
     }
 
 
+    /**
+     * Supports DEPOSIT payment type.
+     */
     @Override
     public boolean supports(PaymentType type) {
         return type == PaymentType.DEPOSIT;
     }
 
+    /**
+     * Executes deposit by calling bank /pay endpoint.
+     */
     @Override
     public void execute(Payment payment, PaymentRequest request) {
         log.info("Initiating Deposit for user: {}", payment.getUserId());

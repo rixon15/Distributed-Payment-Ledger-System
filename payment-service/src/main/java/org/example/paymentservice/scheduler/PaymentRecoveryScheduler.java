@@ -10,6 +10,11 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Periodic recovery worker for stuck pending payments.
+ *
+ * <p>Claims stale rows and retries orchestration through {@code resumeProcessing}.
+ */
 @Component
 @Slf4j
 @RequiredArgsConstructor
@@ -17,6 +22,9 @@ public class PaymentRecoveryScheduler {
 
     private final PaymentService paymentService;
 
+    /**
+     * Runs recovery cycle every fixed delay interval.
+     */
     @Scheduled(fixedDelay = 300_000)
     @Transactional
     public void recoverStuckPayment() {

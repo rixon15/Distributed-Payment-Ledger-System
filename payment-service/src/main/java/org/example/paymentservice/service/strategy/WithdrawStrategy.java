@@ -14,6 +14,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Strategy for withdrawal lifecycle orchestration.
+ *
+ * <p>Initial execution emits pending reserve intent; final authorization/failure
+ * is decided later from ledger response + bank reconciliation.
+ */
 @Component
 @Slf4j
 public class WithdrawStrategy extends PaymentStrategy {
@@ -27,11 +33,17 @@ public class WithdrawStrategy extends PaymentStrategy {
         this.bankUrl = bankUrl;
     }
 
+    /**
+     * Supports WITHDRAWAL payment type.
+     */
     @Override
     public boolean supports(PaymentType type) {
         return type == PaymentType.WITHDRAWAL;
     }
 
+    /**
+     * Starts withdrawal by publishing pending state to outbox.
+     */
     @Override
     public void execute(Payment payment, PaymentRequest request) {
         finalizeStatus(payment, PaymentStatus.PENDING, null);
@@ -48,6 +60,9 @@ public class WithdrawStrategy extends PaymentStrategy {
         }
     }
 
+    /**
+     * Reconciles payment against bank status endpoint.
+     */
     public void reconcilePaymentWithBank(Payment payment) {
         callBankApi(payment);
     }
