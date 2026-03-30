@@ -12,12 +12,31 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * Repository for persisted payment lifecycle records.
+ *
+ * <p>Supports idempotency checks and recovery selection for stale pending payments.
+ */
 @Repository
 public interface PaymentRepository extends JpaRepository<Payment, UUID> {
 
-
+    /**
+     * Finds an existing payment by idempotency key.
+     *
+     * @param s client-supplied idempotency key
+     * @return existing payment if already created
+     */
     Optional<Payment> findByIdempotencyKey(@NotBlank String s);
 
+    /**
+     * Claims stale pending payments for recovery processing.
+     *
+     * <p>Uses {@code FOR UPDATE SKIP LOCKED} semantics to reduce worker contention.
+     *
+     * @param threshold upper bound for stale {@code updated_at}
+     * @param limit max number of rows to claim
+     * @return recoverable pending payments
+     */
     @Query(value = """
         SELECT * FROM payments
         WHERE status = 'PENDING'

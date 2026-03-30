@@ -13,6 +13,13 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
+
+/**
+ * Persistent payment lifecycle aggregate for API-driven payment requests.
+ *
+ * <p>Tracks idempotency, execution status, external bank correlation id, and
+ * recovery-related state transitions.
+ */
 @Entity
 @Table(name = "payments", indexes = {
         @Index(name = "idx_payment_user", columnList = "user_id"),
@@ -31,17 +38,18 @@ public class Payment {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    //The source of thetransfer
+    /** Initiating user of the payment request. */
     @Column(nullable = false)
     private UUID userId;
 
-    //Needed for P2P transfers
+    /** Destination user for transfer/payment/refund flows; null for some external flows. */
     private UUID receiverId;
 
     @Column(nullable = false)
     @Enumerated(EnumType.STRING)
     private PaymentType type;
 
+    /** Client-provided deduplication key; enforced unique in DB. */
     @Column(nullable = false, unique = true)
     private String idempotencyKey;
 
@@ -56,7 +64,7 @@ public class Payment {
     @Enumerated(EnumType.STRING)
     private PaymentStatus status;
 
-    //This allows better tracking of the money, helps with investigations
+    /** External bank transaction correlation id, if available. */
     private String externalTransactionId;
 
     private String errorMessage;
@@ -68,9 +76,15 @@ public class Payment {
     @UpdateTimestamp
     private LocalDateTime updatedAt;
 
+    /** Optimistic version used during concurrent updates. */
     @Version
     private Long version;
 
+    /**
+     * Reconstructs a request-like object from persisted payment state.
+     *
+     * <p>Used by recovery flow to resume business execution.
+     */
     public PaymentRequest mapToRequest() {
         return new PaymentRequest(
                 this.receiverId,

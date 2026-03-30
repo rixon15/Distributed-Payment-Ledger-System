@@ -4,6 +4,9 @@ import lombok.Getter;
 
 import java.util.Currency;
 
+/**
+ * Supported payment currencies represented by ISO-like codes.
+ */
 @Getter
 public enum CurrencyType {
     USD("USD"),
@@ -14,10 +17,6 @@ public enum CurrencyType {
 
     CurrencyType(String code) {
         this.code = code;
-    }
-
-    public Currency toJavaCurrency() {
-        return Currency.getInstance(code);
     }
 
 }
