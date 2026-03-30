@@ -6,8 +6,21 @@ import lombok.extern.slf4j.Slf4j;
 import org.example.paymentservice.dto.PaymentRequest;
 import org.example.paymentservice.model.PaymentType;
 
+/**
+ * Validates cross-field constraints based on payment type.
+ *
+ * <p>Examples:
+ * <ul>
+ *   <li>TRANSFER/PAYMENT require {@code receiverId}</li>
+ *   <li>DEPOSIT/WITHDRAWAL should not provide {@code receiverId}</li>
+ * </ul>
+ */
 @Slf4j
 public class PaymentRequestValidator implements ConstraintValidator<ValidPaymentRequest, PaymentRequest> {
+
+    /**
+     * Applies type-dependent request validation.
+     */
     @Override
     public boolean isValid(PaymentRequest request, ConstraintValidatorContext constraintValidatorContext) {
         if (request == null || request.type() == null) {

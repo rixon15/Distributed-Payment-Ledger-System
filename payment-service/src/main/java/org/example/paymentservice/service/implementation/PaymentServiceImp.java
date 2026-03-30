@@ -29,6 +29,17 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.*;
 
+/**
+ * Main payment orchestration service.
+ *
+ * <p>Responsibilities:
+ * <ul>
+ *   <li>validate idempotency and persist initial payment record,</li>
+ *   <li>execute risk check,</li>
+ *   <li>dispatch to type-specific strategy,</li>
+ *   <li>handle recovery of stuck pending payments.</li>
+ * </ul>
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -48,7 +59,9 @@ public class PaymentServiceImp implements PaymentService {
     @Value("${app.risk-engine.url}")
     private String riskEngineUrl;
 
-    //We created this map to have O(1) lookup instead of O(n)
+    /**
+     * Builds enum-dispatch strategy map at startup.
+     */
     @PostConstruct
     public void initStrategies() {
         log.info("Initializing Payment Strategies...");
@@ -66,6 +79,11 @@ public class PaymentServiceImp implements PaymentService {
         log.info("Strategy Map built with {} entries", strategyMap.size());
     }
 
+    /**
+     * Validates and orchestrates a new payment request end-to-end.
+     *
+     * <p>Creates a pending payment row first, then performs risk screening and strategy execution.
+     */
     @Override
     public void processPayment(UUID senderId, PaymentRequest request) {
 
@@ -138,6 +156,9 @@ public class PaymentServiceImp implements PaymentService {
 
     }
 
+    /**
+     * Retries processing for payments marked as recoverable.
+     */
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void resumeProcessing(UUID paymentId) {
@@ -169,57 +190,9 @@ public class PaymentServiceImp implements PaymentService {
         strategy.execute(payment, request);
     }
 
-    private boolean isIdempotencyConstraintViolation(DataIntegrityViolationException e) {
-        String rootMessage = e.getMostSpecificCause().getMessage();
-        // '23505' is the Postgres SQLState for unique violation
-        return rootMessage != null &&
-                (rootMessage.contains("23505") || rootMessage.contains("uc_payments_idempotency_key"));
-    }
-
-    private RiskResponse checkRisk(UUID senderId, PaymentRequest request) {
-        try {
-            RiskResponse response = restClient.post()
-                    .uri(riskEngineUrl + "/evaluate")
-                    .body(new RiskRequest(senderId, request.amount(), "user-ip"))
-                    .retrieve()
-                    .body(RiskResponse.class);
-
-            return response != null ? response : new RiskResponse(RiskStatus.REJECTED, "Empty Response");
-        } catch (Exception e) {
-            log.error("Risk Engine unreachable", e);
-            return new RiskResponse(RiskStatus.REJECTED, "Risk Service Unavailable");
-        }
-    }
-
-    private void handleRiskFailure(Payment payment, String reason) {
-        tx.executeWithoutResult(_ -> {
-            payment.setStatus(PaymentStatus.FAILED);
-            payment.setErrorMessage("Risk rejected: " + reason);
-            paymentRepository.save(payment);
-        });
-
-        requestLockService.release(payment.getIdempotencyKey());
-    }
-
-    private void handleManualReview(Payment payment, String reason) {
-        log.warn("Payment {} flagged for MANUAL REVIEW: {}", payment.getId(), reason);
-
-        payment.setStatus(PaymentStatus.MANUAL_REVIEW);
-        payment.setErrorMessage(reason);
-        payment.setUpdatedAt(LocalDateTime.now());
-        paymentRepository.save(payment);
-
-        //TODO: implement a way to handle the payments manually
-        outboxRepository.save(
-                OutboxEvent.builder()
-                        .aggregateId(payment.getId().toString())
-                        .eventType(payment.getType())
-                        .payload(objectMapper.writeValueAsString(payment))
-                        .createdAt(Instant.now())
-                        .build()
-        );
-    }
-
+    /**
+     * Claims stale pending payments and marks them as RECOVERING.
+     */
     @Transactional
     public List<UUID> claimStuckPayments(int batchSize) {
         LocalDateTime threshold = LocalDateTime.now().minusMinutes(5);
@@ -237,5 +210,65 @@ public class PaymentServiceImp implements PaymentService {
         paymentRepository.saveAll(stuckPayments);
 
         return claimedIds;
+    }
+
+    private boolean isIdempotencyConstraintViolation(DataIntegrityViolationException e) {
+        String rootMessage = e.getMostSpecificCause().getMessage();
+        // '23505' is the Postgres SQLState for unique violation
+        return rootMessage != null &&
+                (rootMessage.contains("23505") || rootMessage.contains("uc_payments_idempotency_key"));
+    }
+
+    /**
+     * Calls risk engine and normalizes failure into rejected risk response.
+     */
+    private RiskResponse checkRisk(UUID senderId, PaymentRequest request) {
+        try {
+            RiskResponse response = restClient.post()
+                    .uri(riskEngineUrl + "/evaluate")
+                    .body(new RiskRequest(senderId, request.amount(), "user-ip"))
+                    .retrieve()
+                    .body(RiskResponse.class);
+
+            return response != null ? response : new RiskResponse(RiskStatus.REJECTED, "Empty Response");
+        } catch (Exception e) {
+            log.error("Risk Engine unreachable", e);
+            return new RiskResponse(RiskStatus.REJECTED, "Risk Service Unavailable");
+        }
+    }
+
+    /**
+     * Marks payment as failed due to risk rejection and releases idempotency lock.
+     */
+    private void handleRiskFailure(Payment payment, String reason) {
+        tx.executeWithoutResult(_ -> {
+            payment.setStatus(PaymentStatus.FAILED);
+            payment.setErrorMessage("Risk rejected: " + reason);
+            paymentRepository.save(payment);
+        });
+
+        requestLockService.release(payment.getIdempotencyKey());
+    }
+
+    /**
+     * Marks payment for manual review and emits outbox event for downstream handling.
+     */
+    private void handleManualReview(Payment payment, String reason) {
+        log.warn("Payment {} flagged for MANUAL REVIEW: {}", payment.getId(), reason);
+
+        payment.setStatus(PaymentStatus.MANUAL_REVIEW);
+        payment.setErrorMessage(reason);
+        payment.setUpdatedAt(LocalDateTime.now());
+        paymentRepository.save(payment);
+
+        //TODO: implement a way to handle the payments manually
+        outboxRepository.save(
+                OutboxEvent.builder()
+                        .aggregateId(payment.getId().toString())
+                        .eventType(payment.getType())
+                        .payload(objectMapper.writeValueAsString(payment))
+                        .createdAt(Instant.now())
+                        .build()
+        );
     }
 }

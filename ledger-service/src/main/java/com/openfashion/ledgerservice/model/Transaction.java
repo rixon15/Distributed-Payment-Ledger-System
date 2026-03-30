@@ -12,18 +12,27 @@ import org.hibernate.type.SqlTypes;
 import java.time.Instant;
 import java.util.UUID;
 
+
+/**
+ * Immutable business transaction journal entry.
+ *
+ * <p>A transaction captures the high-level accounting event identified by a business
+ * reference id and concrete transaction type. The detailed debit/credit math is stored
+ * separately in associated {@link Posting} rows.
+ */
 @Entity
 @Data
 @Builder
+@Table(name = "transactions")
 @NoArgsConstructor
 @AllArgsConstructor
-@Table(name = "transactions")
 public class Transaction {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
+    /** Upstream business reference shared across related ledger processing stages. */
     @Column(nullable = false, unique = true)
     private UUID referenceId;
 
@@ -35,10 +44,12 @@ public class Transaction {
     @Enumerated(EnumType.STRING)
     private TransactionStatus status;
 
+    /** Serialized request/event context retained for audit and debugging. */
     @Column(columnDefinition = "jsonb")
     @JdbcTypeCode(SqlTypes.JSON)
     private String metadata;
 
+    /** Effective accounting timestamp for the journal entry. */
     @Column(nullable = false)
     private Instant effectiveDate;
 

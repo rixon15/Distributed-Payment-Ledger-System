@@ -18,6 +18,13 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.util.UUID;
 
+/**
+ * Base strategy for payment-type-specific execution and outbox publishing.
+ *
+ * <p>Implementations define how a payment type reaches AUTHORIZED/FAILED and how
+ * status transitions produce ledger-facing outbox events.
+ */
+
 @Slf4j
 @RequiredArgsConstructor
 public abstract class PaymentStrategy {
@@ -29,10 +36,19 @@ public abstract class PaymentStrategy {
     protected final RestClient restClient;
 
 
+    /**
+     * Returns whether this strategy handles the given payment type.
+     */
     public abstract boolean supports(PaymentType type);
 
+    /**
+     * Executes business logic for a payment request.
+     */
     public abstract void execute(Payment payment, PaymentRequest request);
 
+    /**
+     * Persists an outbox event containing the ledger transaction payload.
+     */
     protected void saveOutboxEvent(Payment payment, TransactionStatus status, String userMessage) {
         // Create Payload
         TransactionPayload payloadData = new TransactionPayload(
@@ -71,6 +87,9 @@ public abstract class PaymentStrategy {
         }
     }
 
+    /**
+     * Marks payment failed and emits failure outbox event.
+     */
     protected void handleFailure(Payment payment, String internalReason, String userMessage) {
         log.warn("Payment {} failed: {}", payment.getId(), internalReason);
 
@@ -83,6 +102,9 @@ public abstract class PaymentStrategy {
         });
     }
 
+    /**
+     * Finalizes payment status and emits corresponding outbox event.
+     */
     protected void finalizeStatus(Payment payment, PaymentStatus status, UUID externalId) {
         tx.executeWithoutResult(_ -> {
             payment.setStatus(status);
@@ -99,6 +121,9 @@ public abstract class PaymentStrategy {
         });
     }
 
+    /**
+     * Reconciliation helper that transitions payment based on bank status.
+     */
     protected void reconcileWithBank(Payment payment, BankPaymentResponse bankResult, String bankUrl, int retryCount) {
         if (bankResult == null) return;
 

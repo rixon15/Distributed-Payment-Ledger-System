@@ -1,5 +1,6 @@
 package com.openfashion.ledgerservice.service.imp;
 
+import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.event.TransactionResultEvent;
 import com.openfashion.ledgerservice.model.*;
@@ -17,7 +18,20 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
+
+/**
+ * Batch persistence implementation for ledger posting, outbox emission, and balance sync.
+ *
+ * <p>This service:
+ * <ul>
+ *   <li>warms Redis snapshots from Postgres on startup,</li>
+ *   <li>persists transactions/postings/outbox events in batch,</li>
+ *   <li>updates account balances in Postgres,</li>
+ *   <li>reconciles confirmed balance deltas back into Redis.</li>
+ * </ul>
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -32,6 +46,9 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
 
+    /**
+     * Warms Redis account snapshot cache from current Postgres accounts.
+     */
     @PostConstruct
     public void warmRedisCache() {
         log.info("Warming Redis DB Snapshot cache from Postgres");
@@ -44,6 +61,13 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         log.info("Warmed {} accounts into Redis", allAccounts.size());
     }
 
+    /**
+     * Persists accepted ledger requests as posted transactions, postings, and outbox result events.
+     *
+     * <p>Requests missing debit/credit accounts are skipped and logged as data mismatch candidates.
+     *
+     * @param batch accepted requests from Redis staging
+     */
     @Override
     @Transactional
     public void saveTransactions(List<TransactionRequest> batch) {
@@ -73,8 +97,10 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
 
             transactions.add(tx);
 
-            postings.add(new Posting(tx, debitAcc, req.getAmount(), PostingDirection.DEBIT));
-            postings.add(new Posting(tx, creditAcc, req.getAmount(), PostingDirection.CREDIT));
+            BigDecimal normalizedAmount = MoneyUtil.format(req.getAmount());
+
+            postings.add(new Posting(tx, debitAcc, normalizedAmount, PostingDirection.DEBIT));
+            postings.add(new Posting(tx, creditAcc, normalizedAmount, PostingDirection.CREDIT));
 
             TransactionResultEvent resultEvent = createTransactionResultEvent(
                     req,
@@ -92,6 +118,13 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         log.info("Persisted batch of {} transactions to Postgres.", batch.size());
     }
 
+    /**
+     * Persists NSF rejections as {@code REJECTED_NSF} transactions and emits response outbox events.
+     *
+     * <p>Duplicates are ignored using transaction reference/type lookup.
+     *
+     * @param nsfList requests rejected during Redis pre-validation
+     */
     @Override
     @Transactional
     public void persistRejectedNsf(List<TransactionRequest> nsfList) {
@@ -128,12 +161,21 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         transactionRepository.saveAll(transactions);
     }
 
+    /**
+     * Applies idempotent batch persistence flow:
+     * upsert transactions, keep only newly inserted indices, persist dependent postings/outbox events,
+     * update DB balances, then sync confirmed net changes to Redis.
+     *
+     * @param transactions candidate transactions for upsert
+     * @param postings postings aligned to the transaction list
+     * @param outboxEvents response events aligned to the transaction list
+     */
     public void processBatch(List<Transaction> transactions, List<Posting> postings, List<OutboxEvent> outboxEvents) {
 
         int[] upsertResult = transactionBatchRepository.upsertTransactions(transactions);
 
         // Collect positions (indices), not values.
-        List<Integer> successfulIndices = java.util.stream.IntStream.range(0, upsertResult.length)
+        List<Integer> successfulIndices = IntStream.range(0, upsertResult.length)
                 .filter(i -> upsertResult[i] > 0)
                 .boxed()
                 .toList();

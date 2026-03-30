@@ -1,4 +1,4 @@
-package org.example.paymentservice.scheduler;
+package org.example.paymentservice.listener;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -14,6 +14,11 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.util.UUID;
 
+/**
+ * Consumes ledger response events and triggers withdrawal bank reconciliation.
+ *
+ * <p>Only events with {@code type == WITHDRAWAL_RESERVE} are acted upon.
+ */
 @Component
 @Slf4j
 @RequiredArgsConstructor
@@ -23,6 +28,9 @@ public class LedgerEventListener {
     private final WithdrawStrategy withdrawStrategy;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * Handles messages from {@code transaction.response} and reconciles pending withdrawals.
+     */
     @KafkaListener(topics = "transaction.response", groupId = "payment-group")
     public void onLedgerResponse(String message) {
         try {

@@ -11,6 +11,12 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
 
+/**
+ * REST entrypoint for payment execution requests.
+ *
+ * <p>Accepted requests are guarded by idempotency aspect logic and then forwarded
+ * into the payment orchestration service.
+ */
 @RestController
 @RequestMapping("/payments")
 @RequiredArgsConstructor
@@ -18,6 +24,13 @@ public class PaymentServiceController {
 
     private final PaymentService paymentService;
 
+    /**
+     * Starts asynchronous payment processing.
+     *
+     * @param senderID caller identity from request header
+     * @param request validated payment request payload
+     * @return HTTP 202 when request is accepted for processing
+     */
     @PostMapping("/execute")
     @Idempotent
     public ResponseEntity<Void> executePayment(

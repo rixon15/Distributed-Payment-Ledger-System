@@ -1,6 +1,7 @@
 package com.openfashion.ledgerservice.service.imp;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.consumer.BatchToken;
 import com.openfashion.ledgerservice.dto.redis.AckResult;
@@ -32,6 +33,18 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 
+/**
+ * Redis-backed implementation of ledger staging and stream orchestration.
+ *
+ * <p>Responsibilities:
+ * <ul>
+ *   <li>execute Lua scripts for atomic idempotency and NSF checks,</li>
+ *   <li>append accepted requests to {@code ledger:stream:tx},</li>
+ *   <li>manage consumer-group read/claim/ack and DLQ handoff,</li>
+ *   <li>track batch completion metadata and done notifications,</li>
+ *   <li>sync Redis balance snapshots after confirmed DB persistence.</li>
+ * </ul>
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -143,6 +156,9 @@ public class RedisServiceImp implements RedisService {
     private static final RedisScript<Long> SET_EXPECTED_SPRING_SCRIPT =
             new DefaultRedisScript<>(SET_EXPECTED_SCRIPT, Long.class);
 
+    /**
+     * Initializes consumer identity, preloads Lua scripts, and ensures stream consumer group exists.
+     */
     @PostConstruct
     public void init() {
 
@@ -192,6 +208,21 @@ public class RedisServiceImp implements RedisService {
         log.info("Ledger Lua scripts loaded with SHA");
     }
 
+
+    /**
+     * Atomically validates and stages a batch using Redis Lua.
+     *
+     * <p>For each request:
+     * <ul>
+     *   <li>deduplicates by composite idempotency key,</li>
+     *   <li>optionally performs soft-balance NSF checks,</li>
+     *   <li>writes accepted records to {@code ledger:stream:tx}.</li>
+     * </ul>
+     *
+     * @param batch normalized requests from strategy mapping
+     * @param batchId correlation id for completion tracking
+     * @return map with keys {@code "ok"} and {@code "nsf"}
+     */
     @Override
     public Map<String, List<TransactionRequest>> processBatchAtomic(List<TransactionRequest> batch, String batchId) {
 
@@ -246,6 +277,11 @@ public class RedisServiceImp implements RedisService {
         );
     }
 
+    /**
+     * Reads newly delivered stream entries for this consumer and deserializes payloads.
+     *
+     * <p>Malformed entries are moved to DLQ and acknowledged to avoid blocking the stream.
+     */
     @Override
     public List<StreamEnvelope<TransactionRequest>> readNewFromStream(int count, Duration block) {
         List<StreamEnvelope<TransactionRequest>> envelopes = new ArrayList<>();
@@ -288,23 +324,11 @@ public class RedisServiceImp implements RedisService {
         return envelopes;
     }
 
-    private String asString(Object value) {
-        return switch (value) {
-            case null -> null;
-            case String s -> s;
-            case byte[] bytes -> new String(bytes, StandardCharsets.UTF_8);
-            default -> String.valueOf(value);
-        };
-    }
-
-    private TransactionRequest parsePayload(MapRecord<String, Object, Object> entry) throws IOException {
-        String payloadJson = asString(entry.getValue().get(PAYLOAD));
-        if (payloadJson == null || payloadJson.isBlank()) {
-            throw new IllegalArgumentException("Missing payload for stream entry " + entry.getId().getValue());
-        }
-        return objectMapper.readValue(payloadJson, TransactionRequest.class);
-    }
-
+    /**
+     * Claims stale pending entries from the consumer group after a minimum idle threshold.
+     *
+     * <p>Delivery count is preserved in returned envelopes for retry-cutoff logic.
+     */
     @Override
     public List<StreamEnvelope<TransactionRequest>> claimStaleFromStream(int count, Duration minIdle) {
         List<StreamEnvelope<TransactionRequest>> envelopes = new ArrayList<>();
@@ -376,6 +400,11 @@ public class RedisServiceImp implements RedisService {
         return envelopes;
     }
 
+    /**
+     * Acknowledges persisted stream entries in the consumer group.
+     *
+     * @return ack summary including partial-ack diagnostics
+     */
     @Override
     public AckResult acknowledgePersisted(List<StreamEnvelope<TransactionRequest>> batch) {
         if (batch.isEmpty()) return new AckResult(0, 0, List.of(), true, null);
@@ -407,6 +436,12 @@ public class RedisServiceImp implements RedisService {
         }
     }
 
+    /**
+     * Moves a failed entry to {@code ledger:stream:tx:dlq} and acknowledges the original entry.
+     *
+     * @param failed failing stream envelope
+     * @param reason short machine-readable failure reason
+     */
     @Override
     public void moveToDlqAndAck(StreamEnvelope<TransactionRequest> failed, String reason) {
         try {
@@ -428,6 +463,9 @@ public class RedisServiceImp implements RedisService {
         }
     }
 
+    /**
+     * Marks persisted progress for a batch and emits a DONE signal when processed >= expected.
+     */
     @Override
     public void markBatchProgress(String batchId, int ackedCount) {
 
@@ -448,6 +486,11 @@ public class RedisServiceImp implements RedisService {
 
     }
 
+    /**
+     * Waits until a batch reaches DONE status or timeout expires.
+     *
+     * <p>Completion is detected via metadata hash status and done-stream events.
+     */
     @Override
     public boolean awaitBatchCompletion(String batchId, Duration timeout) {
 
@@ -495,6 +538,9 @@ public class RedisServiceImp implements RedisService {
         return false;
     }
 
+    /**
+     * Creates and initializes Redis metadata for a new batch tracking lifecycle.
+     */
     @Override
     public BatchToken createBatchToken() {
         String batchId = UUID.randomUUID().toString();
@@ -511,6 +557,9 @@ public class RedisServiceImp implements RedisService {
         return new BatchToken(batchId, 0);
     }
 
+    /**
+     * Sets expected accepted count used to transition batch status to DONE.
+     */
     @Override
     public void setBatchExpectedCount(String batchId, int expectedCount) {
 
@@ -529,6 +578,52 @@ public class RedisServiceImp implements RedisService {
 
         balanceTemplate.expire(key, BATCH_META_TTL);
     }
+
+    /**
+     * Applies confirmed net balance deltas to Redis snapshot and pending-delta hashes.
+     *
+     * <p>Called only after DB balance updates are successful.
+     */
+    @Override
+    public void syncRedisBalances(Map<UUID, BigDecimal> netChanges) {
+        if (netChanges.isEmpty()) return;
+
+        balanceTemplate.executePipelined(new SessionCallback<>() {
+            @Override
+            public Object execute(@NonNull RedisOperations operations) {
+                netChanges.forEach((accountId, delta) -> {
+                    BigDecimal normalizedDelta = MoneyUtil.format(delta);
+
+                    operations.execute(
+                            SETTLE_SPRING_SCRIPT,
+                            List.of(DB_SNAPSHOT_KEY, PENDING_DELTA_KEY),
+                            accountId.toString(),
+                            normalizedDelta.toPlainString()
+                    );
+                });
+
+                return null;
+            }
+        });
+    }
+
+    private String asString(Object value) {
+        return switch (value) {
+            case null -> null;
+            case String s -> s;
+            case byte[] bytes -> new String(bytes, StandardCharsets.UTF_8);
+            default -> String.valueOf(value);
+        };
+    }
+
+    private TransactionRequest parsePayload(MapRecord<String, Object, Object> entry) throws IOException {
+        String payloadJson = asString(entry.getValue().get(PAYLOAD));
+        if (payloadJson == null || payloadJson.isBlank()) {
+            throw new IllegalArgumentException("Missing payload for stream entry " + entry.getId().getValue());
+        }
+        return objectMapper.readValue(payloadJson, TransactionRequest.class);
+    }
+
 
     private boolean isBatchDone(String metaKey) {
         String currentStatus = asString(balanceTemplate.opsForHash().get(metaKey, STATUS_FIELD));
@@ -562,25 +657,5 @@ public class RedisServiceImp implements RedisService {
         } catch (Exception e) {
             throw new SerializationFailedException("Serialization failed", e);
         }
-    }
-
-    @Override
-    public void syncRedisBalances(Map<UUID, BigDecimal> netChanges) {
-        if (netChanges.isEmpty()) return;
-
-        balanceTemplate.executePipelined(new SessionCallback<>() {
-            @Override
-            public Object execute(@NonNull RedisOperations operations) {
-                netChanges.forEach((accountId, delta) ->
-                        operations.execute(
-                                SETTLE_SPRING_SCRIPT,
-                                List.of(DB_SNAPSHOT_KEY, PENDING_DELTA_KEY),
-                                accountId.toString(),
-                                delta.toPlainString()
-                        ));
-
-                return null;
-            }
-        });
     }
 }

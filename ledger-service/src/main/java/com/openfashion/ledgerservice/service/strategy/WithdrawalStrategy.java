@@ -9,6 +9,15 @@ import com.openfashion.ledgerservice.repository.AccountRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+
+/**
+ * Maps withdrawal lifecycle events into reserve/settle/release ledger legs.
+ *
+ * <p>Status-driven mapping:
+ * PENDING -> WITHDRAWAL_RESERVE,
+ * POSTED -> WITHDRAWAL_SETTLE,
+ * FAILED -> WITHDRAWAL_RELEASE.
+ */
 @Component
 @Slf4j
 public class WithdrawalStrategy extends LedgerStrategy {
@@ -18,11 +27,20 @@ public class WithdrawalStrategy extends LedgerStrategy {
     }
 
 
+    /**
+     * Supports {@code WITHDRAWAL} inbound type.
+     */
     @Override
     public boolean supports(TransactionType transactionType) {
         return transactionType == TransactionType.WITHDRAWAL;
     }
 
+    /**
+     * Converts withdrawal payload status into a concrete posting leg and resolves accounts:
+     * reserve: user -> PENDING_WITHDRAWAL,
+     * settle: PENDING_WITHDRAWAL -> WORLD_LIQUIDITY,
+     * release: PENDING_WITHDRAWAL -> user.
+     */
     @Override
     public TransactionRequest mapToRequest(TransactionInitiatedEvent event) {
 

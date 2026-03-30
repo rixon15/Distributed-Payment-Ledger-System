@@ -21,12 +21,28 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+
+/**
+ * JDBC implementation of the ledger batch write path.
+ *
+ * <p>This implementation uses batch SQL for two reasons:
+ * <ul>
+ *   <li>idempotent transaction insertion via {@code ON CONFLICT DO NOTHING},</li>
+ *   <li>efficient grouped account balance updates for confirmed postings.</li>
+ * </ul>
+ */
 @Repository
 @RequiredArgsConstructor
 public class TransactionBatchRepositoryImp implements TransactionBatchRepository {
 
     private final JdbcTemplate jdbcTemplate;
 
+    /**
+     * Inserts transactions in batch and skips already-seen {@code reference_id + type} pairs.
+     *
+     * @param transactions candidate transactions
+     * @return batch result array aligned with the input list
+     */
     @Override
     @Transactional
     public int[] upsertTransactions(List<Transaction> transactions) {
@@ -59,6 +75,13 @@ public class TransactionBatchRepositoryImp implements TransactionBatchRepository
 
     }
 
+    /**
+     * Aggregates posting deltas per account and updates balances/version counters in batch.
+     *
+     * <p>Credits add to the balance and debits subtract from it.
+     *
+     * @param filteredPostings postings belonging only to newly inserted transactions
+     */
     @Override
     @Transactional
     public void updateAccountBalances(List<Posting> filteredPostings) {

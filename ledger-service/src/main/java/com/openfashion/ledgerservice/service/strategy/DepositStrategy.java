@@ -1,5 +1,6 @@
 package com.openfashion.ledgerservice.service.strategy;
 
+import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
 import com.openfashion.ledgerservice.dto.event.TransactionPayload;
@@ -8,6 +9,9 @@ import com.openfashion.ledgerservice.repository.AccountRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+/**
+ * Maps deposit events into postings from system liquidity to user account.
+ */
 @Component
 @Slf4j
 public class DepositStrategy extends LedgerStrategy {
@@ -17,11 +21,18 @@ public class DepositStrategy extends LedgerStrategy {
     }
 
 
+    /**
+     * Supports {@code DEPOSIT} transaction type.
+     */
     @Override
     public boolean supports(TransactionType transactionType) {
         return transactionType == TransactionType.DEPOSIT;
     }
 
+    /**
+     * Builds a deposit request:
+     * debit = {@code WORLD_LIQUIDITY}, credit = receiver user account.
+     */
     @Override
     public TransactionRequest mapToRequest(TransactionInitiatedEvent event) {
 
@@ -32,7 +43,7 @@ public class DepositStrategy extends LedgerStrategy {
         request.setType(event.eventType());
         request.setSenderId(payload.senderId());
         request.setReceiverId(payload.receiverId());
-        request.setAmount(payload.amount());
+        request.setAmount(MoneyUtil.format(payload.amount()));
         request.setCurrency(payload.currency());
         request.setDebitAccountId(resolveSystemAccount(WORLD_LIQUIDITY_ACC, payload.currency()));
         request.setCreditAccountId(resolveUserAccount(payload.receiverId(), payload.currency()));
