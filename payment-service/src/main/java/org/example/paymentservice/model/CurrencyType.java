@@ -2,8 +2,6 @@ package org.example.paymentservice.model;
 
 import lombok.Getter;
 
-import java.util.Currency;
-
 /**
  * Supported payment currencies represented by ISO-like codes.
  */

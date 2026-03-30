@@ -23,6 +23,7 @@ import java.util.UUID;
 @Entity
 @Data
 @Builder
+@Table(name = "transactions")
 @NoArgsConstructor
 @AllArgsConstructor
 public class Transaction {

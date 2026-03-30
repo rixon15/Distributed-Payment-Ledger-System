@@ -2,12 +2,10 @@ package com.openfashion.ledgerservice.model;
 
 import lombok.Getter;
 
-import java.util.Currency;
-
 /**
  * Supported ledger currencies.
  *
- * <p>Wraps an ISO-like currency code and provides conversion to {@link java.util.Currency}.
+ * <p>Wraps an ISO-like currency code that can be used with {@link java.util.Currency}.
  */
 @Getter
 public enum CurrencyType {

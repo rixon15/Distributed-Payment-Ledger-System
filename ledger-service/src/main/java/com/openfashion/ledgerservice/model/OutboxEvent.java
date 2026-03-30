@@ -20,6 +20,7 @@ import java.util.UUID;
 @Entity
 @Data
 @Builder
+@Table(name = "outbox_events")
 @AllArgsConstructor
 @NoArgsConstructor
 public class OutboxEvent {
