@@ -11,7 +11,6 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -25,6 +24,9 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.CONFLICT, "DUPLICATED_REQUEST", ex.getMessage());
     }
 
+    /**
+     * Builds normalized error response body.
+     */
     private ResponseEntity<Object> buildResponse(HttpStatus status, String code, String message) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("timestamp", Instant.now());

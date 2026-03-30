@@ -18,16 +18,6 @@ import org.springframework.kafka.support.serializer.JacksonJsonDeserializer;
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * Kafka bean configuration for ledger event consumption and production.
- *
- * <p>Provides:
- * <ul>
- *   <li>typed consumer deserialization for inbound transaction events,</li>
- *   <li>manual ack listener container settings,</li>
- *   <li>idempotent producer settings for outbound publishing.</li>
- * </ul>
- */
 @Configuration
 public class KafkaConfig {
 
@@ -37,9 +27,6 @@ public class KafkaConfig {
     @Value("${spring.kafka.consumer.group-id}")
     private String groupId;
 
-    /**
-     * Common consumer properties shared by typed consumer factories.
-     */
     private Map<String, Object> commonConsumerProps() {
         Map<String, Object> props = new HashMap<>();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
@@ -49,9 +36,6 @@ public class KafkaConfig {
         return props;
     }
 
-    /**
-     * ConsumerFactory for {@code TransactionInitiatedEvent} payloads.
-     */
     @Bean
     public ConsumerFactory<String, TransactionInitiatedEvent> initiatedConsumerFactory() {
         JacksonJsonDeserializer<TransactionInitiatedEvent> jsonDeserializer =
@@ -65,9 +49,6 @@ public class KafkaConfig {
         );
     }
 
-    /**
-     * Listener container factory with manual immediate ack mode.
-     */
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, TransactionInitiatedEvent> initiatedKafkaListenerContainerFactory() {
         ConcurrentKafkaListenerContainerFactory<String, TransactionInitiatedEvent> factory = new ConcurrentKafkaListenerContainerFactory<>();
@@ -76,9 +57,6 @@ public class KafkaConfig {
         return factory;
     }
 
-    /**
-     * ProducerFactory configured for idempotent delivery and all-acks durability.
-     */
     @Bean
     public ProducerFactory<String, Object> producerFactory() {
         Map<String, Object> props = new HashMap<>();
@@ -90,17 +68,11 @@ public class KafkaConfig {
         return new DefaultKafkaProducerFactory<>(props);
     }
 
-    /**
-     * KafkaTemplate used by components that publish outbound events.
-     */
     @Bean
     public KafkaTemplate<String, Object> kafkaTemplate() {
         return new KafkaTemplate<>(producerFactory());
     }
 
-    /**
-     * Native Kafka consumer used by Parallel Consumer configuration.
-     */
     @Bean
     public Consumer<String, TransactionInitiatedEvent> nativeConsumer(
             ConsumerFactory<String, TransactionInitiatedEvent> initiatedEventConsumerFactory
