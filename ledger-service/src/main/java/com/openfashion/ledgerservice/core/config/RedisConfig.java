@@ -6,9 +6,21 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
+/**
+ * Redis template configuration for ledger balance and stream operations.
+ *
+ * <p>Uses string serializers to keep Lua scripts and numeric hash operations
+ * compatible with raw Redis string representations.
+ */
 @Configuration
 public class RedisConfig {
 
+    /**
+     * Creates RedisTemplate used by Redis service implementation.
+     *
+     * @param connectionFactory Spring-managed Redis connection factory
+     * @return string-based Redis template
+     */
     @Bean
     public RedisTemplate<String, String> balanceTemplate(RedisConnectionFactory connectionFactory) {
         RedisTemplate<String, String> template = new RedisTemplate<>();

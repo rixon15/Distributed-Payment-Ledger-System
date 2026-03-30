@@ -1,6 +1,7 @@
 package com.openfashion.ledgerservice.service.imp;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.consumer.BatchToken;
 import com.openfashion.ledgerservice.dto.redis.AckResult;
@@ -590,13 +591,16 @@ public class RedisServiceImp implements RedisService {
         balanceTemplate.executePipelined(new SessionCallback<>() {
             @Override
             public Object execute(@NonNull RedisOperations operations) {
-                netChanges.forEach((accountId, delta) ->
-                        operations.execute(
-                                SETTLE_SPRING_SCRIPT,
-                                List.of(DB_SNAPSHOT_KEY, PENDING_DELTA_KEY),
-                                accountId.toString(),
-                                delta.toPlainString()
-                        ));
+                netChanges.forEach((accountId, delta) -> {
+                    BigDecimal normalizedDelta = MoneyUtil.format(delta);
+
+                    operations.execute(
+                            SETTLE_SPRING_SCRIPT,
+                            List.of(DB_SNAPSHOT_KEY, PENDING_DELTA_KEY),
+                            accountId.toString(),
+                            normalizedDelta.toPlainString()
+                    );
+                });
 
                 return null;
             }

@@ -10,6 +10,11 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/**
+ * Maps domain exceptions to consistent API error responses.
+ *
+ * <p>Responses include timestamp, HTTP status, error code, and message.
+ */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -38,6 +43,9 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.CONFLICT, "DATA_MISMATCH", ex.getMessage());
     }
 
+    /**
+     * Builds a normalized JSON error payload.
+     */
     private ResponseEntity<Object> buildResponse(HttpStatus status, String code, String message) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("timestamp", Instant.now());

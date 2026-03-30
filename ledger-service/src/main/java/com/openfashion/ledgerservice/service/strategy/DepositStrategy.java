@@ -1,5 +1,6 @@
 package com.openfashion.ledgerservice.service.strategy;
 
+import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
 import com.openfashion.ledgerservice.dto.event.TransactionPayload;
@@ -42,7 +43,7 @@ public class DepositStrategy extends LedgerStrategy {
         request.setType(event.eventType());
         request.setSenderId(payload.senderId());
         request.setReceiverId(payload.receiverId());
-        request.setAmount(payload.amount());
+        request.setAmount(MoneyUtil.format(payload.amount()));
         request.setCurrency(payload.currency());
         request.setDebitAccountId(resolveSystemAccount(WORLD_LIQUIDITY_ACC, payload.currency()));
         request.setCreditAccountId(resolveUserAccount(payload.receiverId(), payload.currency()));

@@ -1,5 +1,6 @@
 package com.openfashion.ledgerservice.service.imp;
 
+import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.event.TransactionResultEvent;
 import com.openfashion.ledgerservice.model.*;
@@ -96,8 +97,10 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
 
             transactions.add(tx);
 
-            postings.add(new Posting(tx, debitAcc, req.getAmount(), PostingDirection.DEBIT));
-            postings.add(new Posting(tx, creditAcc, req.getAmount(), PostingDirection.CREDIT));
+            BigDecimal normalizedAmount = MoneyUtil.format(req.getAmount());
+
+            postings.add(new Posting(tx, debitAcc, normalizedAmount, PostingDirection.DEBIT));
+            postings.add(new Posting(tx, creditAcc, normalizedAmount, PostingDirection.CREDIT));
 
             TransactionResultEvent resultEvent = createTransactionResultEvent(
                     req,
