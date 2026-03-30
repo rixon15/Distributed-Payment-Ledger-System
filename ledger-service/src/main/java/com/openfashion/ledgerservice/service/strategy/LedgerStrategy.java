@@ -11,6 +11,12 @@ import lombok.RequiredArgsConstructor;
 
 import java.util.UUID;
 
+/**
+ * Base strategy for mapping inbound transaction events into debit/credit ledger instructions.
+ *
+ * <p>Each implementation owns mapping rules for a specific {@code TransactionType}
+ * (or set of related types) and resolves concrete account ids before persistence.
+ */
 @RequiredArgsConstructor
 public abstract class LedgerStrategy {
 
@@ -18,10 +24,24 @@ public abstract class LedgerStrategy {
     protected static final String PENDING_WITHDRAWAL_ACC = "PENDING_WITHDRAWAL";
     protected static final String WORLD_LIQUIDITY_ACC = "WORLD_LIQUIDITY";
 
+    /**
+     * Returns whether this strategy handles the given transaction type.
+     */
     public abstract boolean supports(TransactionType transactionType);
 
+    /**
+     * Maps an inbound event into a normalized request with resolved debit/credit account ids.
+     *
+     * @throws com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException
+     * when a user account cannot be resolved
+     * @throws com.openfashion.ledgerservice.core.exceptions.MissingSystemAccountException
+     * when a required system account is missing
+     */
     public abstract TransactionRequest mapToRequest(TransactionInitiatedEvent event);
 
+    /**
+     * Resolves user account id for a currency.
+     */
     protected UUID resolveUserAccount(UUID userId, CurrencyType currencyType) {
 
         return accountRepository.findByUserIdAndCurrency(userId, currencyType)
@@ -30,6 +50,9 @@ public abstract class LedgerStrategy {
 
     }
 
+    /**
+     * Resolves system account id by logical name and currency.
+     */
     protected UUID resolveSystemAccount(String systemAccountName, CurrencyType currencyType) {
         return accountRepository.findByNameAndCurrency(systemAccountName, currencyType)
                 .orElseThrow(() -> new MissingSystemAccountException(systemAccountName))

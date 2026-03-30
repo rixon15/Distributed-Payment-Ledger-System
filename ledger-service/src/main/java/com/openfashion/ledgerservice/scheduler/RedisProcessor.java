@@ -16,6 +16,13 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+/**
+ * Scheduled Redis stream worker that persists staged ledger requests into Postgres.
+ *
+ * <p>This processor reads fresh and stale pending entries from {@code ledger:stream:tx},
+ * performs batch DB persistence, acknowledges successfully persisted stream records,
+ * and handles retry cutoff / DLQ routing for repeatedly failing items.
+ */
 @Slf4j
 @RequiredArgsConstructor
 @Component
@@ -25,6 +32,11 @@ public class RedisProcessor {
     private final LedgerBatchService ledgerBatchService;
     private static final int MAX_ATTEMPTS = 3;
 
+    /**
+     * Drains claimable stream entries, deduplicates by stream id, persists them, and ACKs success.
+     *
+     * <p>On batch failure, records remain pending and are retried individually to isolate poison messages.
+     */
     @Scheduled(fixedDelay = 500)
     public void processQueue() {
 
@@ -74,6 +86,15 @@ public class RedisProcessor {
 
     }
 
+    /**
+     * Attempts to persist and acknowledge a single stream entry.
+     *
+     * <p>If delivery attempts exceed {@code maxAttempts}, the record is moved to
+     * {@code ledger:stream:tx:dlq} and acknowledged in the main stream.
+     *
+     * @param message stream envelope to process
+     * @param maxAttempts retry cutoff before DLQ
+     */
     private void processOneWithRetryCutoff(StreamEnvelope<TransactionRequest> message, int maxAttempts) {
         try {
             ledgerBatchService.saveTransactions(List.of(message.data()));
@@ -108,6 +129,12 @@ public class RedisProcessor {
         }
     }
 
+    /**
+     * Reports successful acknowledgements to Redis batch metadata so upstream waiters
+     * can detect when a batch reaches DONE state.
+     *
+     * @param ackedMessages stream entries that were successfully persisted and acknowledged
+     */
     private void markBatchProgress(List<StreamEnvelope<TransactionRequest>> ackedMessages) {
         Map<String, Long> ackedByBatch = ackedMessages.stream()
                 .filter(m -> m.batchId() != null && !m.batchId().isBlank())

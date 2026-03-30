@@ -21,6 +21,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+/**
+ * Kafka ingestion entrypoint for ledger processing.
+ *
+ * <p>This component subscribes to {@code transaction.request}, maps inbound events
+ * through {@link com.openfashion.ledgerservice.service.strategy.LedgerStrategy} implementations,
+ * stages validated requests in Redis, and waits for downstream DB persistence completion.
+ *
+ * <p>Pipeline summary:
+ * <ol>
+ *   <li>Consume batch from Kafka via Parallel Consumer.</li>
+ *   <li>Map event type to strategy and build normalized {@code TransactionRequest} items.</li>
+ *   <li>Run Redis Lua pre-processing ({@code processBatchAtomic}) for idempotency + NSF checks.</li>
+ *   <li>Persist NSF rejections immediately; wait for accepted batch completion signal.</li>
+ * </ol>
+ */
 @Component
 @Slf4j
 @RequiredArgsConstructor
@@ -33,13 +48,20 @@ public class TransactionEventListener {
     private final Map<TransactionType, LedgerStrategy> strategyMap = new EnumMap<>(TransactionType.class);
     private final LedgerBatchService ledgerBatchService;
 
+    /**
+     * Initializes strategy mapping and starts asynchronous Kafka consumption.
+     */
     @PostConstruct
     public void init() {
         initStrategies();
         startConsuming();
     }
 
-
+    /**
+     * Builds an enum-dispatch map for all supported {@code TransactionType} values.
+     *
+     * <p>Any type without a registered strategy is logged and remains unsupported at runtime.
+     */
     private void initStrategies() {
 
         log.info("Initializing Transaction Strategies...");
@@ -57,6 +79,12 @@ public class TransactionEventListener {
         log.info("Ledger Strategy Map initialized with {} strategies", strategyMap.size());
     }
 
+    /**
+     * Starts polling {@code transaction.request} and submits mapped batches into Redis staging.
+     *
+     * <p>Throws a timeout exception when accepted records are not confirmed as persisted
+     * within the configured wait window, allowing safe retry behavior.
+     */
     private void startConsuming() {
         parallelConsumer.subscribe(List.of("transaction.request"));
 

@@ -7,6 +7,9 @@ import com.openfashion.ledgerservice.model.TransactionType;
 import com.openfashion.ledgerservice.repository.AccountRepository;
 import org.springframework.stereotype.Component;
 
+/**
+ * Maps user-to-user transfer/payment events into direct debit/credit postings.
+ */
 @Component
 public class TransferStrategy extends LedgerStrategy {
 
@@ -14,12 +17,19 @@ public class TransferStrategy extends LedgerStrategy {
         super(accountRepository);
     }
 
+    /**
+     * Supports {@code TRANSFER} and {@code PAYMENT} transaction types.
+     */
     @Override
     public boolean supports(TransactionType transactionType) {
         return transactionType == TransactionType.TRANSFER ||
                 transactionType == TransactionType.PAYMENT;
     }
 
+    /**
+     * Builds transfer request:
+     * debit = sender account, credit = receiver account (same currency).
+     */
     @Override
     public TransactionRequest mapToRequest(TransactionInitiatedEvent event) {
 

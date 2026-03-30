@@ -12,13 +12,4 @@ import java.util.UUID;
 @Repository
 public interface OutboxRepository extends JpaRepository<OutboxEvent, UUID> {
 
-
-    @Query(value = """
-    SELECT * FROM outbox_events
-    WHERE status = 'PENDING'
-    ORDER BY created_at
-    LIMIT :limit
-    FOR UPDATE SKIP LOCKED
-    """, nativeQuery = true)
-    List<OutboxEvent> findTopForProcessing(@Param("limit") int limit);
 }
