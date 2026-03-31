@@ -1,9 +1,13 @@
 # Distributed Payment & Ledger System
 
+___
+
 A high-throughput, event-driven payment processing system designed to guarantee consistency, idempotency, and financial
 integrity at scale.
 
 # Overview
+
+___
 
 This project simulates a production-grade financial system capable of handling concurrent transactions while preventing
 double spending through:
@@ -28,6 +32,8 @@ It models real-world constraints like:
 
 # Architecture
 
+___
+
 ![System Architecture](https://kroki.io/plantuml/svg/eNqNVM1q20AQvu9TDD60ySEp9FhKifwDDTVE2Ka99DJeTexFq11lf0ycUuiz9NH6JJ1dSY7tpFAfhGbm-775tW58QBdio4WvlWnRYQPSNq01ZMIy7DUBB98fRbUyFPYtgXVha48CU7rHqMOKHkOh1cY0rACSH-SEaFHWuCEYlXGtlYTb5GahEfwQwD-UwToYTbRKrKJtR4AeZDbFzyP-7DERUUPp7E5V5PwgcSgbRgvla5iZDZeadRzb55gxmhqK8jYD1mycpCmd2mEgmOjoOeErOUrc5w6X5HZK0ndzUcSwhT-_fsNtRQwLZOQ-23dObskHh0FZc5kTth37XHRO1YbckeZX1KrKvKxUWh-U2eT3JYWgKal0kjpzRZZkCq7RcyMLqpRnobmVte949p6rDqm7ZE6pim2n4BL2jD-0OR2zSG90OncxrO3joZ1qfcbse8nEQkobB-LKofG8cG7qpVLXBYudj2ZKa3pSsYHJdJKRVe_IwIdIkXN-wfsaYexsnXbGoDo5xDEkPGe_dsROH_rmH4Jtlfw31nMpvj8oZmUw38xbuLq6ggXpvCa_Va1PHiG66-X3T8O64QN8Xq3KJbyDxWy5SvfW-RMmHSkDZjvUkZdzEkv3ybF0Ydapp-fgx8xMe0th-RCVI0i7PqHn9TBgiTuCYaNv-rnnKjicgMNMGbsgrOBbMRcHX5eqmxID8j_Zb8XBleLdvPMz2906GT3h0cSGgG_IodakL4Xogyc9zCNCf_Q0AJ6FchdjDHLLgk2jwiDy__X7l_X71-u_ju318eoKvzeSdT1_5eBirvjDYMhxHzdkKv5K_gWj8MrX)
 
 ## What Makes This Interesting
@@ -39,7 +45,7 @@ It models real-world constraints like:
     * balance checks
 * **Batch persistence** to Postgres
 
-### **Result:** sub-millisecond validation + minimized DB contention
+**Result:** sub-millisecond validation + minimized DB contention
 
 ## Strong Consistency in a Distributed System
 
@@ -155,6 +161,8 @@ sequenceDiagram
 
 # Services
 
+___
+
 ## Payment Service (Orchestrator)
 
 * Handles:
@@ -168,6 +176,13 @@ sequenceDiagram
 * Spring Boot
 * AOP (Idempotency)
 * Kafka
+
+### Data Model
+
+| Table         |          Purpose          |
+|---------------|:-------------------------:|
+| payments      | Immutable business events |
+| outbox_events | Reliable event publishing |
 
 ## Ledger Service (Source of Truth)
 
@@ -190,25 +205,30 @@ sequenceDiagram
 | postings      |   Debit/Credit entries    |
 | outbox_events | Reliable event publishing |
 
-
 # Roadmap
 
+___
+
 ## Authentication Service
+
 * JWT + OAuth2
 * Refresh token rotation
 * Redis-backed revocation
 
 ## Notification Service
+
 * Event-driven (Kafka consumers)
 * Email (SendGrid), SMS (Twilio)
 * DLQ + rate limiting
 
 ## API Gateway (DevOps-owned)
+
 * Routing
 * Rate limiting
 * JWT validation
 
 ## Tech Stack
+
 * **Java 25 + Spring Boot 4**
 * **PostgreSQL 16**
 * **Redis 7**
@@ -224,6 +244,7 @@ sequenceDiagram
 git clone https://github.com/rixon15/Distributed-Payment-Ledger-System
 cd Distributed-Payment-Ledger-System
 ```
+
 ### Start Infrastructure
 
 ```
@@ -231,6 +252,7 @@ docker-compose up -d
 ```
 
 ### Run Services
+
 ```
 ./payment-service/mvnw spring-boot:run
 ./ledger-service/mvnw spring-boot:run
