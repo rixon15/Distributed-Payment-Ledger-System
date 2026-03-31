@@ -1,13 +1,9 @@
 # Distributed Payment & Ledger System
 
-___
-
 A high-throughput, event-driven payment processing system designed to guarantee consistency, idempotency, and financial
 integrity at scale.
 
 # Overview
-
-___
 
 This project simulates a production-grade financial system capable of handling concurrent transactions while preventing
 double spending through:
@@ -31,8 +27,6 @@ It models real-world constraints like:
 * **Throughput optimized** → Avoid DB bottlenecks with Redis staging
 
 # Architecture
-
-___
 
 ![System Architecture](https://kroki.io/plantuml/svg/eNqNVM1q20AQvu9TDD60ySEp9FhKifwDDTVE2Ka99DJeTexFq11lf0ycUuiz9NH6JJ1dSY7tpFAfhGbm-775tW58QBdio4WvlWnRYQPSNq01ZMIy7DUBB98fRbUyFPYtgXVha48CU7rHqMOKHkOh1cY0rACSH-SEaFHWuCEYlXGtlYTb5GahEfwQwD-UwToYTbRKrKJtR4AeZDbFzyP-7DERUUPp7E5V5PwgcSgbRgvla5iZDZeadRzb55gxmhqK8jYD1mycpCmd2mEgmOjoOeErOUrc5w6X5HZK0ndzUcSwhT-_fsNtRQwLZOQ-23dObskHh0FZc5kTth37XHRO1YbckeZX1KrKvKxUWh-U2eT3JYWgKal0kjpzRZZkCq7RcyMLqpRnobmVte949p6rDqm7ZE6pim2n4BL2jD-0OR2zSG90OncxrO3joZ1qfcbse8nEQkobB-LKofG8cG7qpVLXBYudj2ZKa3pSsYHJdJKRVe_IwIdIkXN-wfsaYexsnXbGoDo5xDEkPGe_dsROH_rmH4Jtlfw31nMpvj8oZmUw38xbuLq6ggXpvCa_Va1PHiG66-X3T8O64QN8Xq3KJbyDxWy5SvfW-RMmHSkDZjvUkZdzEkv3ybF0Ydapp-fgx8xMe0th-RCVI0i7PqHn9TBgiTuCYaNv-rnnKjicgMNMGbsgrOBbMRcHX5eqmxID8j_Zb8XBleLdvPMz2906GT3h0cSGgG_IodakL4Xogyc9zCNCf_Q0AJ6FchdjDHLLgk2jwiDy__X7l_X71-u_ju318eoKvzeSdT1_5eBirvjDYMhxHzdkKv5K_gWj8MrX)
 
@@ -161,8 +155,6 @@ sequenceDiagram
 
 # Services
 
-___
-
 ## Payment Service (Orchestrator)
 
 * Handles:
@@ -206,8 +198,6 @@ ___
 | outbox_events | Reliable event publishing |
 
 # Roadmap
-
-___
 
 ## Authentication Service
 
