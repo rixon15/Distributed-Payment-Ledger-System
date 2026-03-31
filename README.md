@@ -82,7 +82,7 @@ sequenceDiagram
     participant User
     participant Pay as Payment Service
     participant Risk as Risk Engine
-    participant DB_P as Pay DB (Outbox)
+    participant DB_P as Payment DB (Outbox)
     participant Kafka
     participant Redis
     participant Ledger as Ledger Service
@@ -116,7 +116,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant Pay as Payment Service
-    participant DB_P as Pay DB (Outbox)
+    participant DB_P as Payment DB (Outbox)
     participant Kafka
     participant Ledger as Ledger Service
     participant Bank as External Bank
