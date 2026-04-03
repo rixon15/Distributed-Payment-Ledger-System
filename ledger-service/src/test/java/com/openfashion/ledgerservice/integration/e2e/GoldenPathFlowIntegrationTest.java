@@ -240,6 +240,37 @@ class GoldenPathFlowIntegrationTest extends AbstractIntegrationTest {
                 });
     }
 
+    @Test
+    void withdrawalReserve_thenFailedStatus_releasesFundsBackToUser() throws Exception {
+        UUID userId = UUID.randomUUID();
+        Account user = createUserAccount(userId, "USER_WALLET", new BigDecimal("100.0000"));
+        Account pending = createSystemAccount("PENDING_WITHDRAWAL", new BigDecimal("0"));
+
+        UUID referenceId = UUID.randomUUID();
+
+        String reserve = eventJson(referenceId, "WITHDRAWAL", userId, userId, "50.0000", "PENDING");
+        kafkaTemplate.send(TOPIC, referenceId.toString(), reserve).get();
+
+        Awaitility.await()
+                .atMost(Duration.ofSeconds(20))
+                .untilAsserted(() -> {
+                    assertThat(readBalance(user.getId())).isEqualByComparingTo("50.0000");
+                    assertThat(readBalance(pending.getId())).isEqualByComparingTo("50.0000");
+                    assertThat(transactionRepository.findByReferenceIdAndType(referenceId, TransactionType.WITHDRAWAL_RESERVE)).isPresent();
+                });
+
+        String release = eventJson(referenceId, "WITHDRAWAL", userId, userId, "50.0000", "FAILED");
+        kafkaTemplate.send(TOPIC, referenceId.toString(), release).get();
+
+        Awaitility.await()
+                .atMost(Duration.ofSeconds(20))
+                .untilAsserted(() -> {
+                    assertThat(readBalance(user.getId())).isEqualByComparingTo("100.0000");
+                    assertThat(readBalance(pending.getId())).isEqualByComparingTo("0.0000");
+                    assertThat(transactionRepository.findByReferenceIdAndType(referenceId, TransactionType.WITHDRAWAL_RELEASE)).isPresent();
+                });
+    }
+
     private Account createUserAccount(UUID userId, String name, BigDecimal balance) {
 
         return accountRepository.findByUserIdAndCurrency(userId, CurrencyType.USD)

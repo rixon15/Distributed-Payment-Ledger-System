@@ -5,14 +5,22 @@ import com.openfashion.ledgerservice.integration.base.AbstractIntegrationTest;
 import com.openfashion.ledgerservice.model.*;
 import com.openfashion.ledgerservice.repository.AccountRepository;
 import com.openfashion.ledgerservice.repository.TransactionRepository;
+import com.openfashion.ledgerservice.scheduler.RedisProcessor;
 import com.openfashion.ledgerservice.service.RedisService;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.testcontainers.shaded.com.fasterxml.jackson.databind.deser.std.StringDeserializer;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 
 import java.math.BigDecimal;
@@ -29,6 +37,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 class KafkaResilienceIntegrationTest extends AbstractIntegrationTest {
 
     private static final String TOPIC = "transaction.request";
+    private static final String DLQ_TOPIC = "transaction.response.dlq";
+
+    @Value("${spring.kafka.bootstrap-servers}")
+    private String bootstrapServers;
 
     @Autowired
     private KafkaTemplate<String, Object> kafkaTemplate;
@@ -75,6 +87,7 @@ class KafkaResilienceIntegrationTest extends AbstractIntegrationTest {
     }
 
 
+    //isIgnored: It is ignored from the point of processing the malformed JSON
     @Test
     void malformedJson_isIgnoredAndNextValidEventStillProcesses() throws Exception {
         Seed seed = seedTransferAccounts();
@@ -181,6 +194,55 @@ class KafkaResilienceIntegrationTest extends AbstractIntegrationTest {
         );
 
         assertThat(unknownTx).isZero();
+    }
+
+    @Test
+    void malformedJson_routesToKafkaDlq_andMainFlowContinues() throws Exception {
+        Seed seed = seedTransferAccounts();
+
+        String malformed = "{\"eventId\": \"not-even-complete\"";
+        UUID goodReef = UUID.randomUUID();
+        String valid = eventJson(
+                goodReef, "TRANSFER", seed.userA, seed.userB, "25.0000"
+        );
+
+        try (Consumer<String, String> dlqConsumer = newDlqConsumer("it-dlq-" + UUID.randomUUID())) {
+
+            kafkaTemplate.send(TOPIC, UUID.randomUUID().toString(), malformed).get();
+
+        }
+    }
+
+    private Consumer<String, String> newDlqConsumer(String groupId) {
+        Map<String, Object> props = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers,
+                ConsumerConfig.GROUP_ID_CONFIG, groupId,
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest",
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, true,
+                ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class,
+                ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class
+        );
+
+        Consumer<String, String> consumer = new KafkaConsumer<>(props);
+        consumer.subscribe(List.of(DLQ_TOPIC));
+
+        consumer.poll(Duration.ofMillis(500));
+        return consumer;
+    }
+
+    private ConsumerRecord<String, String> awaitDlqRecord(
+            Consumer<String, String> consumer,
+            Duration timeout
+    ) {
+        long deadline = System.nanoTime() + timeout.toNanos();
+
+        while (System.nanoTime() < deadline) {
+            for (ConsumerRecord<String, String> record : consumer.poll(Duration.ofMillis(500))) {
+                return record;
+            }
+        }
+
+        return null;
     }
 
     private Seed seedTransferAccounts() {

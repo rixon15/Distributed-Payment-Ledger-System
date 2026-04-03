@@ -5,6 +5,7 @@ import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.integration.base.AbstractIntegrationTest;
 import com.openfashion.ledgerservice.model.*;
 import com.openfashion.ledgerservice.repository.AccountRepository;
+import com.openfashion.ledgerservice.scheduler.RedisProcessor;
 import com.openfashion.ledgerservice.service.LedgerBatchService;
 import com.openfashion.ledgerservice.service.RedisService;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -43,6 +45,9 @@ class RedisLuaIntegrationTest extends AbstractIntegrationTest {
     private StringRedisTemplate redisTemplate;
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @MockitoBean
+    private RedisProcessor redisProcessor;
 
     @BeforeEach
     void cleanState() {
@@ -215,6 +220,33 @@ class RedisLuaIntegrationTest extends AbstractIntegrationTest {
         BigDecimal receiverATotal = readBalance(receiverA.getId());
         BigDecimal receiverBTotal = readBalance(receiverB.getId());
         assertThat(receiverATotal.add(receiverBTotal)).isEqualByComparingTo("100.0000");
+    }
+
+    @Test
+    void maxBatchSize_500Requests_allProcessedAndPersisted() {
+        Account sender = createUserAccount(UUID.randomUUID(), "SENDER", "1000.0000");
+
+        List<TransactionRequest> batch = new ArrayList<>();
+        for(int i = 0; i < 500; i++) {
+            Account receiver = createUserAccount(UUID.randomUUID(), "RECEIVER_" + i, "0.0000");
+            batch.add(transfer(UUID.randomUUID(), sender.getId(), receiver.getId(), "1.0000"));
+        }
+
+        Map<String, List<TransactionRequest>> result = redisService.processBatchAtomic(batch, UUID.randomUUID().toString());
+
+        assertThat(result.getOrDefault("ok", List.of())).hasSize(500);
+        assertThat(result.getOrDefault("nsf", List.of())).isEmpty();
+
+        applyResultsToDb(result);
+
+        Integer txCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM transactions WHERE type = 'TRANSFER' AND status = 'POSTED' ",
+                Integer.class
+        );
+
+        assertThat(txCount).isEqualTo(500);
+
+        assertThat(readBalance(sender.getId())).isEqualByComparingTo("500.0000");
     }
 
     private void applyResultsToDb(Map<String, List<TransactionRequest>> results) {
