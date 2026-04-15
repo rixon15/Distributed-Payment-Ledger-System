@@ -96,6 +96,12 @@ public class TransactionEventListener {
                         // Access the value directly from the RecordContext
                         TransactionInitiatedEvent event = recordContext.value();
 
+                        if (event == null) {
+                            log.warn("Discarding malformed message with key: {}. Check 'spinrgDeserializerExceptionValue' header for details.", recordContext.key());
+
+                            return null;
+                        }
+
                         LedgerStrategy strategy = strategyMap.get(event.eventType());
 
                         if (strategy == null) {

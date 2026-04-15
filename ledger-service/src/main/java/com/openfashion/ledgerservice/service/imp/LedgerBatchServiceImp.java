@@ -158,7 +158,7 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         }
 
         outboxRepository.saveAll(outboxEvents);
-        transactionRepository.saveAll(transactions);
+        transactionBatchRepository.upsertTransactions(transactions);
     }
 
     /**
