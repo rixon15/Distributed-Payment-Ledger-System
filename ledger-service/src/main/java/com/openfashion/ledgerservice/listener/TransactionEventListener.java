@@ -97,7 +97,7 @@ public class TransactionEventListener {
                         TransactionInitiatedEvent event = recordContext.value();
 
                         if (event == null) {
-                            log.warn("Discarding malformed message with key: {}. Check 'spinrgDeserializerExceptionValue' header for details.", recordContext.key());
+                            log.warn("Discarding malformed message with key: {}. Check 'springDeserializerExceptionValue' header for details.", recordContext.key());
 
                             return null;
                         }

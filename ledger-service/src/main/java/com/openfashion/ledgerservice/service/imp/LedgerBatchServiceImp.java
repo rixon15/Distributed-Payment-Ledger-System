@@ -157,8 +157,26 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
             outboxEvents.add(createOutboxEvent(request, request.getDebitAccountId(), resultEvent));
         }
 
-        outboxRepository.saveAll(outboxEvents);
-        transactionBatchRepository.upsertTransactions(transactions);
+        if (transactions.isEmpty()) {
+            return;
+        }
+
+        int[] upsertResult = transactionBatchRepository.upsertTransactions(transactions);
+
+        List<Integer> successfulIndices = IntStream.range(0, upsertResult.length)
+                .filter(i -> upsertResult[i] > 0)
+                .boxed()
+                .toList();
+
+        if (successfulIndices.isEmpty()) {
+            return;
+        }
+
+        List<OutboxEvent> insertedOutboxEvents = successfulIndices.stream()
+                .map(outboxEvents::get)
+                .toList();
+
+        outboxRepository.saveAll(insertedOutboxEvents);
     }
 
     /**
