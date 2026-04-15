@@ -2,12 +2,15 @@ package com.openfashion.ledgerservice.integration.redis;
 
 import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
+import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
 import com.openfashion.ledgerservice.integration.base.AbstractIntegrationTest;
 import com.openfashion.ledgerservice.model.*;
 import com.openfashion.ledgerservice.repository.AccountRepository;
 import com.openfashion.ledgerservice.scheduler.RedisProcessor;
 import com.openfashion.ledgerservice.service.LedgerBatchService;
 import com.openfashion.ledgerservice.service.RedisService;
+import io.confluent.parallelconsumer.ParallelStreamProcessor;
+import jakarta.annotation.PreDestroy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,6 +52,9 @@ class RedisLuaIntegrationTest extends AbstractIntegrationTest {
     @MockitoBean
     private RedisProcessor redisProcessor;
 
+    @Autowired
+    private ParallelStreamProcessor<String, TransactionInitiatedEvent> parallelConsumer;
+
     @BeforeEach
     void cleanState() {
         jdbcTemplate.execute(
@@ -62,6 +68,13 @@ class RedisLuaIntegrationTest extends AbstractIntegrationTest {
                 DLQ_STREAM_KEY,
                 BATCH_DONE_STREAM
         ));
+    }
+
+    @PreDestroy
+    public void stopConsuming() {
+        if (parallelConsumer != null) {
+            parallelConsumer.close();
+        }
     }
 
     @Test
@@ -108,35 +121,40 @@ class RedisLuaIntegrationTest extends AbstractIntegrationTest {
         TransactionRequest request = transfer(referenceId, sender.getId(), receiver.getId(), "50.0000");
 
         int threads = 10;
-        ExecutorService pool = Executors.newFixedThreadPool(threads);
-        CountDownLatch ready = new CountDownLatch(threads);
-        CountDownLatch start = new CountDownLatch(1);
-
-        List<Future<Map<String, List<TransactionRequest>>>> futures = new ArrayList<>();
-
-        for (int i = 0; i < threads; i++) {
-            futures.add(pool.submit(() -> {
-                ready.countDown();
-                boolean isReady = start.await(5, TimeUnit.SECONDS);
-                assertThat(isReady).as("Threads failed to reach the 'ready' state within timeout").isTrue();
-
-                return redisService.processBatchAtomic(List.of(request), UUID.randomUUID().toString());
-            }));
-        }
-
-        ready.await();
-        start.countDown();
 
         List<TransactionRequest> allOk = new ArrayList<>();
         List<TransactionRequest> allNsf = new ArrayList<>();
 
-        for (Future<Map<String, List<TransactionRequest>>> future : futures) {
-            Map<String, List<TransactionRequest>> result = future.get(10, TimeUnit.SECONDS);
-            allOk.addAll(result.getOrDefault("ok", List.of()));
-            allNsf.addAll(result.getOrDefault("nsf", List.of()));
+        try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
+            CountDownLatch ready = new CountDownLatch(threads);
+            CountDownLatch start = new CountDownLatch(1);
+
+            List<Future<Map<String, List<TransactionRequest>>>> futures = new ArrayList<>();
+
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> {
+                    ready.countDown();
+                    boolean isReady = start.await(5, TimeUnit.SECONDS);
+                    assertThat(isReady).as("Threads failed to reach the 'ready' state within timeout").isTrue();
+
+                    return redisService.processBatchAtomic(List.of(request), UUID.randomUUID().toString());
+                }));
+            }
+
+            ready.await();
+            start.countDown();
+
+
+
+            for (Future<Map<String, List<TransactionRequest>>> future : futures) {
+                Map<String, List<TransactionRequest>> result = future.get(10, TimeUnit.SECONDS);
+                allOk.addAll(result.getOrDefault("ok", List.of()));
+                allNsf.addAll(result.getOrDefault("nsf", List.of()));
+            }
+
+            pool.shutdownNow();
         }
 
-        pool.shutdownNow();
 
         assertThat(allOk).hasSize(1);
         assertThat(allNsf).isEmpty();
@@ -163,33 +181,38 @@ class RedisLuaIntegrationTest extends AbstractIntegrationTest {
         TransactionRequest req1 = transfer(UUID.randomUUID(), sender.getId(), receiverA.getId(), "100.0000");
         TransactionRequest req2 = transfer(UUID.randomUUID(), sender.getId(), receiverB.getId(), "100.0000");
 
-        ExecutorService pool = Executors.newFixedThreadPool(2);
-        CountDownLatch ready = new CountDownLatch(2);
-        CountDownLatch start = new CountDownLatch(1);
+        Map<String, List<TransactionRequest>> r1;
+        Map<String, List<TransactionRequest>> r2;
 
-        Future<Map<String, List<TransactionRequest>>> f1 = pool.submit(() -> {
-            ready.countDown();
-            boolean isReady = start.await(5, TimeUnit.SECONDS);
+        try(ExecutorService pool = Executors.newFixedThreadPool(2)) {
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+
+            Future<Map<String, List<TransactionRequest>>> f1 = pool.submit(() -> {
+                ready.countDown();
+                boolean isReady = start.await(5, TimeUnit.SECONDS);
+                assertThat(isReady).as("Threads failed to reach the 'ready' state within timeout").isTrue();
+
+                return redisService.processBatchAtomic(List.of(req1), UUID.randomUUID().toString());
+            });
+            Future<Map<String, List<TransactionRequest>>> f2 = pool.submit(() -> {
+                ready.countDown();
+                boolean isReady = start.await(5, TimeUnit.SECONDS);
+                assertThat(isReady).as("Threads failed to reach the 'ready' state within timeout").isTrue();
+
+                return redisService.processBatchAtomic(List.of(req2), UUID.randomUUID().toString());
+            });
+
+            boolean isReady = ready.await(5, TimeUnit.SECONDS);
             assertThat(isReady).as("Threads failed to reach the 'ready' state within timeout").isTrue();
 
-            return redisService.processBatchAtomic(List.of(req1), UUID.randomUUID().toString());
-        });
-        Future<Map<String, List<TransactionRequest>>> f2 = pool.submit(() -> {
-            ready.countDown();
-            boolean isReady = start.await(5, TimeUnit.SECONDS);
-            assertThat(isReady).as("Threads failed to reach the 'ready' state within timeout").isTrue();
+            start.countDown();
 
-            return redisService.processBatchAtomic(List.of(req2), UUID.randomUUID().toString());
-        });
+            r1 = f1.get(10, TimeUnit.SECONDS);
+            r2 = f2.get(10, TimeUnit.SECONDS);
+            pool.shutdownNow();
+        }
 
-        boolean isReady = ready.await(5, TimeUnit.SECONDS);
-        assertThat(isReady).as("Threads failed to reach the 'ready' state within timeout").isTrue();
-
-        start.countDown();
-
-        Map<String, List<TransactionRequest>> r1 = f1.get(10, TimeUnit.SECONDS);
-        Map<String, List<TransactionRequest>> r2 = f2.get(10, TimeUnit.SECONDS);
-        pool.shutdownNow();
 
         List<TransactionRequest> ok = new ArrayList<>();
         List<TransactionRequest> nsf = new ArrayList<>();
@@ -227,7 +250,7 @@ class RedisLuaIntegrationTest extends AbstractIntegrationTest {
         Account sender = createUserAccount(UUID.randomUUID(), "SENDER", "1000.0000");
 
         List<TransactionRequest> batch = new ArrayList<>();
-        for(int i = 0; i < 500; i++) {
+        for (int i = 0; i < 500; i++) {
             Account receiver = createUserAccount(UUID.randomUUID(), "RECEIVER_" + i, "0.0000");
             batch.add(transfer(UUID.randomUUID(), sender.getId(), receiver.getId(), "1.0000"));
         }
