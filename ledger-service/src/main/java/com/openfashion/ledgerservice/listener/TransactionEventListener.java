@@ -1,15 +1,16 @@
 package com.openfashion.ledgerservice.listener;
 
 import com.openfashion.ledgerservice.core.exceptions.DbTimeoutException;
-import com.openfashion.ledgerservice.core.exceptions.UnsupportedTransactionException;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.consumer.BatchToken;
 import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
 import com.openfashion.ledgerservice.model.TransactionType;
+import com.openfashion.ledgerservice.service.DlqPublisher;
 import com.openfashion.ledgerservice.service.LedgerBatchService;
 import com.openfashion.ledgerservice.service.RedisService;
 import com.openfashion.ledgerservice.service.strategy.LedgerStrategy;
 import io.confluent.parallelconsumer.ParallelStreamProcessor;
+import io.confluent.parallelconsumer.PollContext;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -47,6 +48,7 @@ public class TransactionEventListener {
     private final List<LedgerStrategy> strategyList;
     private final Map<TransactionType, LedgerStrategy> strategyMap = new EnumMap<>(TransactionType.class);
     private final LedgerBatchService ledgerBatchService;
+    private final DlqPublisher dlqPublisher;
 
     /**
      * Initializes strategy mapping and starts asynchronous Kafka consumption.
@@ -88,7 +90,7 @@ public class TransactionEventListener {
     private void startConsuming() {
         parallelConsumer.subscribe(List.of("transaction.request"));
 
-        parallelConsumer.poll(context -> {
+        parallelConsumer.poll((PollContext<String, TransactionInitiatedEvent> context) -> {
             // In version 0.5.x, .stream() provides the records in the batch
             // when .batchSize() is set in the options.
             List<TransactionRequest> batch = context.stream()
@@ -97,15 +99,15 @@ public class TransactionEventListener {
                         TransactionInitiatedEvent event = recordContext.value();
 
                         if (event == null) {
-                            log.warn("Discarding malformed message with key: {}. Check 'springDeserializerExceptionValue' header for details.", recordContext.key());
-
+                            dlqPublisher.publishMalformedToDlq(recordContext);
                             return null;
                         }
 
                         LedgerStrategy strategy = strategyMap.get(event.eventType());
 
                         if (strategy == null) {
-                            throw new UnsupportedTransactionException(event.eventType());
+                            dlqPublisher.publishUnsupportedTypeToDlq(recordContext, String.valueOf(event.eventType()));
+                            return null;
                         }
 
                         return strategy.mapToRequest(event);
