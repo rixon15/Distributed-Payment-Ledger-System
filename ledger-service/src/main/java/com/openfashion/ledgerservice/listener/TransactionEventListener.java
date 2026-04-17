@@ -106,7 +106,7 @@ public class TransactionEventListener {
                         LedgerStrategy strategy = strategyMap.get(event.eventType());
 
                         if (strategy == null) {
-                            dlqPublisher.publishUnsupportedTypeToDlq(recordContext, event.eventType().name());
+                            dlqPublisher.publishUnsupportedTypeToDlq(recordContext, String.valueOf(event.eventType()));
                             return null;
                         }
 

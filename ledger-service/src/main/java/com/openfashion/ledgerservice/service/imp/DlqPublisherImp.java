@@ -10,9 +10,8 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
 
-import java.io.ByteArrayInputStream;
-import java.io.ObjectInputStream;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -25,7 +24,7 @@ public class DlqPublisherImp implements DlqPublisher {
     private static final String DLQ_TOPIC = "transaction.request.dlq";
 
     private final KafkaTemplate<String, Object> kafkaTemplate;
-    private final ObjectMapper objectMapper;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
     public void publishMalformedToDlq(RecordContext<String, TransactionInitiatedEvent> recordContext) {
@@ -33,32 +32,15 @@ public class DlqPublisherImp implements DlqPublisher {
         try {
             String key = recordContext.key();
 
-            Header exHeader = recordContext.headers().lastHeader("springDeserializerExceptionValue");
-
             String errorType = "DESERIALIZATION_ERROR";
             String errorMessage = "Unknown deserialization error";
-            TransactionInitiatedEvent rawPayload = recordContext.value();
+            String deserializerExceptionHeaderBase64 = null;
 
-            if (exHeader != null) {
-                byte[] exceptionBytes = exHeader.value();
-
-                try (ByteArrayInputStream bis = new ByteArrayInputStream(exceptionBytes)) {
-
-                    ObjectInputStream ois = new ObjectInputStream(bis);
-
-                    Throwable deserializationException = (Throwable) ois.readObject();
-
-                    log.error("Message with key {} failed to deserialize. Reason: {}",
-                            recordContext.key(),
-                            deserializationException.getMessage());
-
-                } catch (Exception e) {
-                    log.error("Could not parse deserialization exception header", e);
-                }
-            } else {
-                log.warn("Malformed message sent to DLQ but no deserialization exception header was found, Key: {}",
-                        recordContext.key());
+            Header exHeader = recordContext.headers().lastHeader("springDeserializerExceptionValue");
+            if (exHeader != null && exHeader.value() != null) {
+                deserializerExceptionHeaderBase64 = Base64.getEncoder().encodeToString(exHeader.value());
             }
+
 
             Map<String, Object> dlq = new HashMap<>();
             dlq.put("dlqId", UUID.randomUUID().toString());
@@ -68,7 +50,7 @@ public class DlqPublisherImp implements DlqPublisher {
             dlq.put("key", recordContext.key());
             dlq.put("errorType", errorType);
             dlq.put("errorMessage", errorMessage);
-            dlq.put("rawPayload", rawPayload);
+            dlq.put("deserializerExceptionHeaderBase64", deserializerExceptionHeaderBase64);
             dlq.put("timestamp", Instant.now().toString());
 
             kafkaTemplate.send(DLQ_TOPIC, key, objectMapper.writeValueAsString(dlq));
