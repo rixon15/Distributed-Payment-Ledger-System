@@ -18,7 +18,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.testcontainers.shaded.com.fasterxml.jackson.databind.deser.std.StringDeserializer;
+import org.apache.kafka.common.serialization.StringDeserializer;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 
 import java.math.BigDecimal;
@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class KafkaResilienceIntegrationTest extends AbstractIntegrationTest {
 
     private static final String TOPIC = "transaction.request";
-    private static final String DLQ_TOPIC = "transaction.response.dlq";
+    private static final String DLQ_TOPIC = "transaction.request.dlq";
 
     @Value("${spring.kafka.bootstrap-servers}")
     private String bootstrapServers;
@@ -199,15 +199,69 @@ class KafkaResilienceIntegrationTest extends AbstractIntegrationTest {
         Seed seed = seedTransferAccounts();
 
         String malformed = "{\"eventId\": \"not-even-complete\"";
-        UUID goodReef = UUID.randomUUID();
+        UUID goodRef = UUID.randomUUID();
         String valid = eventJson(
-                goodReef, "TRANSFER", seed.userA, seed.userB, "25.0000"
+                goodRef, "TRANSFER", seed.userA, seed.userB, "25.0000"
         );
 
-        try (Consumer<String, String> dlqConsumer = newDlqConsumer("it-dlq-" + UUID.randomUUID())) {
-
+        try (Consumer<String, String> dlqConsumer = newDlqConsumer("dlq-test-" + UUID.randomUUID())) {
             kafkaTemplate.send(TOPIC, UUID.randomUUID().toString(), malformed).get();
+            kafkaTemplate.send(TOPIC, goodRef.toString(), valid).get();
 
+            ConsumerRecord<String, String> dlqRecord = awaitDlqRecord(dlqConsumer, Duration.ofSeconds(20));
+            assertThat(dlqRecord).isNotNull();
+            assertThat(dlqRecord.topic()).isEqualTo(DLQ_TOPIC);
+            assertThat(dlqRecord.key()).isNotBlank();
+            assertThat(dlqRecord.value()).contains("\"errorType\":\"DESERIALIZATION_ERROR\"");
+            assertThat(dlqRecord.value()).contains("\"sourceTopic\":\"transaction.request\"");
+
+            Awaitility.await()
+                    .atMost(Duration.ofSeconds(20))
+                    .untilAsserted(() -> assertThat(
+                            transactionRepository.findByReferenceIdAndType(goodRef, TransactionType.TRANSFER)
+                    ).isPresent());
+        }
+
+    }
+
+    @Test
+    void unsupportedType_routesToDlq_andNextValidStillProcesses() throws Exception {
+        Seed seed = seedTransferAccounts();
+
+        UUID unsupportedRef = UUID.randomUUID();
+        String unsupported = eventJson(
+                unsupportedRef, "FEE", seed.userA, seed.userB, "10.0000"
+        );
+
+        UUID goodRef = UUID.randomUUID();
+        String valid = eventJson(
+                goodRef, "TRANSFER", seed.userA, seed.userB, "25.0000"
+        );
+
+        try (Consumer<String, String> dlqConsumer = newDlqConsumer("dlq-unsupported-" + UUID.randomUUID())) {
+            kafkaTemplate.send(TOPIC, unsupportedRef.toString(), unsupported).get();
+            kafkaTemplate.send(TOPIC, goodRef.toString(), valid).get();
+
+            ConsumerRecord<String, String> dlqRecord = awaitDlqRecord(dlqConsumer, Duration.ofSeconds(20));
+            assertThat(dlqRecord).isNotNull();
+            assertThat(dlqRecord.topic()).isEqualTo(DLQ_TOPIC);
+            assertThat(dlqRecord.value()).contains("\"errorType\":\"UNSUPPORTED_EVENT_TYPE\"");
+            assertThat(dlqRecord.value()).contains("\"sourceTopic\":\"transaction.request\"");
+            assertThat(dlqRecord.value()).contains("No strategy mapped for eventType=FEE");
+
+            Awaitility.await()
+                    .atMost(Duration.ofSeconds(20))
+                    .untilAsserted(() -> assertThat(
+                            transactionRepository.findByReferenceIdAndType(goodRef, TransactionType.TRANSFER))
+                            .isPresent());
+
+            Integer unsupportedTx = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM transactions WHERE reference_id = ?",
+                    Integer.class,
+                    unsupportedRef
+            );
+
+            assertThat(unsupportedTx).isZero();
         }
     }
 
