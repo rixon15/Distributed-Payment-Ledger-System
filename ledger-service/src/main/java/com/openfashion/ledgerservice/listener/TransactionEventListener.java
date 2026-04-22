@@ -98,6 +98,9 @@ public class TransactionEventListener {
                         // Access the value directly from the RecordContext
                         TransactionInitiatedEvent event = recordContext.value();
 
+                        //Should check for business rules and publish message to manual review in case something goes
+                        //wrong. DLQ / Manual Review Queue (MRQ)
+
                         if (event == null) {
                             dlqPublisher.publishMalformedToDlq(recordContext);
                             return null;
