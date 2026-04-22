@@ -115,7 +115,7 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
         assertTransactionStatus(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.TRANSFER);
         assertNoPostingsForReference(event.referenceId());
         assertOutboxExists(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.TRANSFER);
-        assertThat(accountBalance(event.referenceId(), event.payload().currency())).isEqualByComparingTo(originalBalance);
+        assertThat(accountBalance(userAId, event.payload().currency())).isEqualByComparingTo(originalBalance);
     }
 
     @Test
@@ -225,7 +225,7 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
         publishTransactionRequest(event);
         awaitTerminalState(event.referenceId(), WAIT_TIMEOUT);
 
-        assertTransactionStatus(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.TRANSFER);
+        assertTransactionStatus(event.referenceId(), TransactionStatus.POSTED, TransactionType.TRANSFER);
         assertThat(accountBalance(userAId, CurrencyType.USD)).isEqualByComparingTo("75.0000");
         assertThat(accountBalance(userBId, CurrencyType.USD)).isEqualByComparingTo("50.0000");
         assertOutboxExists(event.referenceId(), TransactionStatus.POSTED, TransactionType.TRANSFER);
