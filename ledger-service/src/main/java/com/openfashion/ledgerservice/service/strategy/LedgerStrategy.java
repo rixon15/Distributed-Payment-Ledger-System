@@ -30,6 +30,11 @@ public abstract class LedgerStrategy {
     public abstract boolean supports(TransactionType transactionType);
 
     /**
+     * Checks if the transaction request is valid based on the business rules
+     */
+    public abstract boolean isValid(TransactionRequest transactionRequest);
+
+    /**
      * Maps an inbound event into a normalized request with resolved debit/credit account ids.
      *
      * @throws com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException
