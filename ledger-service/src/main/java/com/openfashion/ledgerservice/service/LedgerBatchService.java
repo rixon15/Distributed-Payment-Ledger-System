@@ -1,6 +1,7 @@
 package com.openfashion.ledgerservice.service;
 
 import com.openfashion.ledgerservice.dto.TransactionRequest;
+import com.openfashion.ledgerservice.model.TransactionStatus;
 
 import java.util.List;
 
@@ -19,10 +20,12 @@ public interface LedgerBatchService {
      */
     void saveTransactions(List<TransactionRequest> batch);
 
-    /**
-     * Persists insufficient-funds rejections generated during Redis pre-validation.
-     *
-     * @param nsfList requests rejected as NSF
-     */
-    void persistRejectedNsf(List<TransactionRequest> nsfList);
+//    /**
+//     * Persists insufficient-funds rejections generated during Redis pre-validation.
+//     *
+//     * @param nsfList requests rejected as NSF
+//     */
+//    void persistRejectedNsf(List<TransactionRequest> nsfList);
+
+    void persistRejected(List<TransactionRequest> rejectedList, TransactionStatus reason);
 }

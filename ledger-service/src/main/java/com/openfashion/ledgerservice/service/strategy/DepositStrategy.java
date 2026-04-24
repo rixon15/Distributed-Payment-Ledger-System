@@ -9,6 +9,8 @@ import com.openfashion.ledgerservice.repository.AccountRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+
 /**
  * Maps deposit events into postings from system liquidity to user account.
  */
@@ -27,6 +29,14 @@ public class DepositStrategy extends LedgerStrategy {
     @Override
     public boolean supports(TransactionType transactionType) {
         return transactionType == TransactionType.DEPOSIT;
+    }
+
+    @Override
+    public boolean isValidTransaction(TransactionInitiatedEvent event) {
+        return event.payload().senderId() != null &&
+                event.payload().senderId().equals(event.payload().receiverId()) &&
+                event.payload().amount() != null &&
+                event.payload().amount().compareTo(BigDecimal.ZERO) > 0;
     }
 
     /**
