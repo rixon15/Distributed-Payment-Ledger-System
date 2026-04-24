@@ -121,6 +121,11 @@ public class TransactionEventListener {
                     validRequests.add(strategy.mapToRequest(event));
                 } catch (AccountNotFoundException | MissingSystemAccountException | AccountInactiveException e) {
                     log.warn("Account resolution failed for referenceId={}: {}", event.referenceId(), e.getMessage());
+                    validationFailures.add(strategy.createRejectedRequest(event));
+                    dlqPublisher.publishBusinessViolationMessageToDlq(recordContext);
+                } catch (Exception e) {
+                    // If it's a completely unexpected system error, THEN it goes to the DLQ
+                    log.error("Unexpected error mapping request", e);
                     dlqPublisher.publishMalformedToDlq(recordContext);
                 }
             });

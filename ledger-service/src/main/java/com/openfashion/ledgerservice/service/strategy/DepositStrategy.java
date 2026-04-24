@@ -33,10 +33,10 @@ public class DepositStrategy extends LedgerStrategy {
 
     @Override
     public boolean isValidTransaction(TransactionInitiatedEvent event) {
-        return event.payload().receiverId() == null &&
+        return event.payload().senderId() != null &&
+                event.payload().senderId().equals(event.payload().receiverId()) &&
                 event.payload().amount() != null &&
-                event.payload().amount().compareTo(BigDecimal.ZERO) > 0 &&
-                event.payload().senderId() != null;
+                event.payload().amount().compareTo(BigDecimal.ZERO) > 0;
     }
 
     /**

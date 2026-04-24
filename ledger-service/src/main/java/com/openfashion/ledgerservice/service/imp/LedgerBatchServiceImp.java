@@ -154,11 +154,12 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
                     decideMessage(reason)
             );
 
-            Account senderAccount = accountRepository.findByUserIdAndCurrency(request.getSenderId(), request.getCurrency())
-                    .orElseThrow(() -> new AccountNotFoundException(request.getSenderId()));
+            Optional<Account> senderAccount = accountRepository.findByUserIdAndCurrency(request.getSenderId(), request.getCurrency());
+
+            UUID aggregateKey = senderAccount.map(Account::getId).orElse(request.getSenderId());
 
             transactions.add(createTransaction(request, reason));
-            outboxEvents.add(createOutboxEvent(request, senderAccount.getId(), resultEvent));
+            outboxEvents.add(createOutboxEvent(request, aggregateKey, resultEvent));
         }
 
         if (transactions.isEmpty()) {
