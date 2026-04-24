@@ -33,7 +33,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
-class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
+class TransferBoundaryIntegrationTest extends AbstractIntegrationTest {
 
     private static final String IDEMPOTENCY_KEY = "ledger:idempotency:set";
     private static final String DB_SNAPSHOT_KEY = "ledger:db:snapshot";
