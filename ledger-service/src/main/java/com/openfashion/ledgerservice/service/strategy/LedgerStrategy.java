@@ -2,12 +2,14 @@ package com.openfashion.ledgerservice.service.strategy;
 
 import com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException;
 import com.openfashion.ledgerservice.core.exceptions.MissingSystemAccountException;
+import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
 import com.openfashion.ledgerservice.model.CurrencyType;
 import com.openfashion.ledgerservice.model.TransactionType;
 import com.openfashion.ledgerservice.repository.AccountRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.UUID;
 
@@ -18,6 +20,7 @@ import java.util.UUID;
  * (or set of related types) and resolves concrete account ids before persistence.
  */
 @RequiredArgsConstructor
+@Slf4j
 public abstract class LedgerStrategy {
 
     protected final AccountRepository accountRepository;
@@ -63,4 +66,19 @@ public abstract class LedgerStrategy {
                 .orElseThrow(() -> new MissingSystemAccountException(systemAccountName))
                 .getId();
     }
+
+    public TransactionRequest createRejectedRequest(TransactionInitiatedEvent event) {
+        TransactionRequest request = new TransactionRequest();
+        request.setReceiverId(event.referenceId());
+        request.setType(event.eventType());
+        request.setSenderId(event.payload().senderId());
+        request.setReceiverId(event.payload().receiverId());
+        request.setAmount(MoneyUtil.format(event.payload().amount()));
+        request.setCurrency(event.payload().currency());
+
+        log.info("Mapped Rejeected Request for reference: {}", event.referenceId());
+
+        return request;
+    }
+
 }

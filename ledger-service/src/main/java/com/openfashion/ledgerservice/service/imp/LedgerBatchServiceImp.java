@@ -118,42 +118,42 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         log.info("Persisted batch of {} transactions to Postgres.", batch.size());
     }
 
-    /**
-     * Persists NSF rejections as {@code REJECTED_NSF} transactions and emits response outbox events.
-     *
-     * <p>Duplicates are ignored using transaction reference/type lookup.
-     *
-     * @param nsfList requests rejected during Redis pre-validation
-     */
+    //    /**
+//     * Persists NSF rejections as {@code REJECTED_NSF} transactions and emits response outbox events.
+//     *
+//     * <p>Duplicates are ignored using transaction reference/type lookup.
+//     *
+//     * @param nsfList requests rejected during Redis pre-validation
+//     */
     @Override
     @Transactional
-    public void persistRejectedNsf(List<TransactionRequest> nsfList) {
+    public void persistRejected(List<TransactionRequest> rejectedList, TransactionStatus reason) {
 
-        if (nsfList.isEmpty()) {
+        if (rejectedList.isEmpty()) {
             return;
         }
 
         List<OutboxEvent> outboxEvents = new ArrayList<>();
         List<Transaction> transactions = new ArrayList<>();
 
-        for (TransactionRequest request : nsfList) {
+        for (TransactionRequest request : rejectedList) {
 
             Optional<Transaction> existingTransaction = transactionRepository.findByReferenceIdAndType(request.getReferenceId(), request.getType());
 
             if (existingTransaction.isPresent()) {
-                log.warn("Duplicate NSF transaction detected for referenceId: {}, type: {}. Skipping.",
+                log.warn("Duplicate REJECTED transaction detected for referenceId: {}, type: {}. Skipping.",
                         request.getReferenceId(), request.getType());
                 continue;
             }
 
             TransactionResultEvent resultEvent = createTransactionResultEvent(
                     request,
-                    TransactionStatus.REJECTED_NSF,
-                    "NSF",
-                    "Transaction rejected due to insufficient funds"
+                    reason,
+                    decideReasonCode(reason),
+                    decideMessage(reason)
             );
 
-            transactions.add(createTransaction(request, TransactionStatus.REJECTED_NSF));
+            transactions.add(createTransaction(request, reason));
             outboxEvents.add(createOutboxEvent(request, request.getDebitAccountId(), resultEvent));
         }
 
@@ -274,5 +274,33 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
                 .metadata(serialize(request))
                 .createdAt(Instant.now())
                 .build();
+    }
+
+    private String decideReasonCode(TransactionStatus status) {
+        switch (status) {
+            case REJECTED_NSF -> {
+                return "NSF";
+            }
+            case REJECTED_VALIDATION -> {
+                return "VALIDATION";
+            }
+            case null, default -> {
+                return "UNKNOWN";
+            }
+        }
+    }
+
+    private String decideMessage(TransactionStatus status) {
+        switch (status) {
+            case REJECTED_NSF -> {
+                return "Transaction rejected due to insufficient funds";
+            }
+            case REJECTED_VALIDATION -> {
+                return "Transaction rejected due to business violation";
+            }
+            case null, default -> {
+                return "Unknown error";
+            }
+        }
     }
 }
