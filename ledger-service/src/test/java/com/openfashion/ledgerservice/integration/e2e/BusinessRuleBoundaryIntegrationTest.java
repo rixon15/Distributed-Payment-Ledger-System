@@ -12,13 +12,13 @@ import com.openfashion.ledgerservice.repository.AccountRepository;
 import com.openfashion.ledgerservice.repository.OutboxRepository;
 import com.openfashion.ledgerservice.repository.PostingRepository;
 import com.openfashion.ledgerservice.repository.TransactionRepository;
+import com.openfashion.ledgerservice.service.RedisService;
 import org.hibernate.AssertionFailure;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.RedisCallback;
-import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -27,12 +27,10 @@ import tools.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Currency;
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.fail;
 
 @SpringBootTest
 class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
@@ -65,9 +63,11 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
     @Autowired
     private PostingRepository postingRepository;
     @Autowired
-    KafkaTemplate<String, TransactionInitiatedEvent> kafkaTemplate;
+    KafkaTemplate<String, Object> kafkaTemplate;
     @Autowired
     private ObjectMapper objectMapper;
+    @Autowired
+    private RedisService redisService;
 
 
     @BeforeEach
@@ -102,9 +102,9 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
         BigDecimal originalBalance = accountBalance(userAId, CurrencyType.USD);
 
         TransactionInitiatedEvent event = transferEvent(
-                "ref-slef-" + UUID.randomUUID(),
-                userAUsd.getId(),
-                userBUsd.getId(),
+                UUID.randomUUID(),
+                userAId,
+                userAId,
                 new BigDecimal("10.0000"),
                 CurrencyType.USD
         );
@@ -114,7 +114,12 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
 
         assertTransactionStatus(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.TRANSFER);
         assertNoPostingsForReference(event.referenceId());
-        assertOutboxExists(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.TRANSFER);
+        assertOutboxExists(
+                userAUsd.getId(),
+                event.referenceId(),
+                TransactionStatus.REJECTED_VALIDATION,
+                TransactionType.TRANSFER
+        );
         assertThat(accountBalance(userAId, event.payload().currency())).isEqualByComparingTo(originalBalance);
     }
 
@@ -124,7 +129,7 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
         BigDecimal receiverOriginalBalance = accountBalance(userBId, CurrencyType.USD);
 
         TransactionInitiatedEvent event = transferEvent(
-                "ref-zer-" + UUID.randomUUID(),
+                UUID.randomUUID(),
                 userAId,
                 userBId,
                 new BigDecimal("0.0000"),
@@ -135,10 +140,15 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
         awaitTerminalState(event.referenceId(), WAIT_TIMEOUT);
 
         assertTransactionStatus(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.TRANSFER);
-        assertThat(accountBalance(userAUsd.getId(), CurrencyType.USD)).isEqualByComparingTo(senderOriginalBalance);
-        assertThat(accountBalance(userBUsd.getId(), CurrencyType.USD)).isEqualByComparingTo(receiverOriginalBalance);
+        assertThat(accountBalance(userAId, CurrencyType.USD)).isEqualByComparingTo(senderOriginalBalance);
+        assertThat(accountBalance(userBId, CurrencyType.USD)).isEqualByComparingTo(receiverOriginalBalance);
         assertNoPostingsForReference(event.referenceId());
-        assertOutboxExists(event.referenceId(), TransactionStatus.FAILED, TransactionType.TRANSFER);
+        assertOutboxExists(
+                userAUsd.getId(),
+                event.referenceId(),
+                TransactionStatus.REJECTED_VALIDATION,
+                TransactionType.TRANSFER
+        );
     }
 
     @Test
@@ -147,9 +157,9 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
         BigDecimal receiverOriginalBalance = accountBalance(userBId, CurrencyType.USD);
 
         TransactionInitiatedEvent event = transferEvent(
-                "ref-neg-" + UUID.randomUUID(),
-                userAUsd.getId(),
-                userBUsd.getId(),
+                UUID.randomUUID(),
+                userAId,
+                userBId,
                 new BigDecimal("-50.0000"),
                 CurrencyType.USD
         );
@@ -161,7 +171,12 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
         assertThat(accountBalance(userAId, CurrencyType.USD)).isEqualByComparingTo(senderOriginalBalance);
         assertThat(accountBalance(userBId, CurrencyType.USD)).isEqualByComparingTo(receiverOriginalBalance);
         assertNoPostingsForReference(event.referenceId());
-        assertOutboxExists(event.referenceId(), TransactionStatus.FAILED, TransactionType.TRANSFER);
+        assertOutboxExists(
+                userAUsd.getId(),
+                event.referenceId(),
+                TransactionStatus.REJECTED_VALIDATION,
+                TransactionType.TRANSFER
+        );
     }
 
     @Test
@@ -170,11 +185,12 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
         BigDecimal receiverOriginalBalance = accountBalance(userBId, CurrencyType.USD);
 
         userAUsd.setStatus(AccountStatus.CLOSED);
+        accountRepository.saveAndFlush(userAUsd);
 
         TransactionInitiatedEvent event = transferEvent(
-                "ref-closed" + UUID.randomUUID(),
-                userAUsd.getId(),
-                userBUsd.getId(),
+                UUID.randomUUID(),
+                userAId,
+                userBId,
                 new BigDecimal("10.0000"),
                 CurrencyType.USD
         );
@@ -186,7 +202,12 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
         assertThat(accountBalance(userAId, CurrencyType.USD)).isEqualByComparingTo(senderOriginalBalance);
         assertThat(accountBalance(userBId, CurrencyType.USD)).isEqualByComparingTo(receiverOriginalBalance);
         assertNoPostingsForReference(event.referenceId());
-        assertOutboxExists(event.referenceId(), TransactionStatus.FAILED, TransactionType.TRANSFER);
+        assertOutboxExists(
+                userAUsd.getId(),
+                event.referenceId(),
+                TransactionStatus.REJECTED_VALIDATION,
+                TransactionType.TRANSFER
+        );
     }
 
     @Test
@@ -195,11 +216,11 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
         BigDecimal receiverOriginalBalance = accountBalance(userBId, CurrencyType.EUR);
 
         TransactionInitiatedEvent event = transferEvent(
-                "ref-fx" + UUID.randomUUID(),
-                userAUsd.getId(),
-                userBEur.getId(),
+                UUID.randomUUID(),
+                userAId,
+                userBId,
                 new BigDecimal("10.0000"),
-                CurrencyType.USD
+                CurrencyType.EUR
         );
 
         publishTransactionRequest(event);
@@ -209,15 +230,20 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
         assertThat(accountBalance(userAId, CurrencyType.USD)).isEqualByComparingTo(senderOriginalBalance);
         assertThat(accountBalance(userBId, CurrencyType.EUR)).isEqualByComparingTo(receiverOriginalBalance);
         assertNoPostingsForReference(event.referenceId());
-        assertOutboxExists(event.referenceId(), TransactionStatus.FAILED, TransactionType.TRANSFER);
+        assertOutboxExists(
+                userAId,
+                event.referenceId(),
+                TransactionStatus.REJECTED_VALIDATION,
+                TransactionType.TRANSFER
+        );
     }
 
     @Test
     void validTransfer_stillPosts_asControlCase() {
         TransactionInitiatedEvent event = transferEvent(
-                "ref-control" + UUID.randomUUID(),
-                userAUsd.getId(),
-                userBUsd.getId(),
+                UUID.randomUUID(),
+                userAId,
+                userBId,
                 new BigDecimal("25.0000"),
                 CurrencyType.USD
         );
@@ -228,12 +254,17 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
         assertTransactionStatus(event.referenceId(), TransactionStatus.POSTED, TransactionType.TRANSFER);
         assertThat(accountBalance(userAId, CurrencyType.USD)).isEqualByComparingTo("75.0000");
         assertThat(accountBalance(userBId, CurrencyType.USD)).isEqualByComparingTo("50.0000");
-        assertOutboxExists(event.referenceId(), TransactionStatus.POSTED, TransactionType.TRANSFER);
+        assertOutboxExists(
+                userAUsd.getId(),
+                event.referenceId(),
+                TransactionStatus.POSTED,
+                TransactionType.TRANSFER
+        );
     }
 
 
     private TransactionInitiatedEvent transferEvent(
-            String referenceId,
+            UUID referenceId,
             UUID debitAccountId,
             UUID creditAccountId,
             BigDecimal amount,
@@ -242,7 +273,7 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
         return new TransactionInitiatedEvent(
                 UUID.randomUUID(),
                 TransactionType.TRANSFER,
-                UUID.fromString(referenceId),
+                referenceId,
                 Instant.now(),
                 new TransactionPayload(
                         debitAccountId,
@@ -298,7 +329,10 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
         newAccount.setCreatedAt(Instant.now());
         newAccount.setUpdatedAt(Instant.now());
 
-        return accountRepository.save(newAccount);
+        Account savedAccount = accountRepository.save(newAccount);
+        redisService.initializeSnapshotIfMissing(savedAccount);
+
+        return savedAccount;
     }
 
     private BigDecimal accountBalance(UUID userId, CurrencyType currencyType) {
@@ -310,7 +344,7 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
 
     private void publishTransactionRequest(TransactionInitiatedEvent event) {
         String key = event.referenceId().toString();
-        kafkaTemplate.send(TRANSACTION_REQUEST_TOPIC, key, event).join();
+        kafkaTemplate.send(TRANSACTION_REQUEST_TOPIC, key, objectMapper.writeValueAsString(event)).join();
     }
 
     private void awaitTerminalState(UUID referenceId, Duration timeout) {
@@ -371,22 +405,28 @@ class BusinessRuleBoundaryIntegrationTest extends AbstractIntegrationTest {
         assertThat(postings).isEmpty();
     }
 
-    private void assertOutboxExists(UUID referenceId, TransactionStatus expectedStatus, TransactionType type) {
+    private void assertOutboxExists(
+            UUID expectedAggregateId,
+            UUID expectedReferenceId,
+            TransactionStatus expectedStatus,
+            TransactionType type) {
+
         OutboxEvent outbox = outboxRepository.findAll().stream()
-                .filter(e -> referenceId.toString().equals(e.getAggregateId()))
+                // 1. Find it by the Kafka Partition Key (Account ID)
+                .filter(e -> expectedAggregateId.toString().equals(e.getAggregateId()))
                 .filter(e -> e.getEventType() == type)
                 .findFirst()
-                .orElseThrow(() -> new AssertionFailure("No outbox event found for referenceId=" + referenceId));
+                .orElseThrow(() -> new AssertionFailure("No outbox event found for aggregateId=" + expectedAggregateId));
 
         TransactionResultEvent resultEvent;
-
         try {
             resultEvent = objectMapper.readValue(outbox.getPayload(), TransactionResultEvent.class);
         } catch (Exception _) {
-            throw new AssertionFailure("Failed to deserialize outbox payload for referenceId=" + referenceId);
+            throw new AssertionFailure("Failed to deserialize outbox payload");
         }
 
-        assertThat(resultEvent.referenceId()).isEqualTo(referenceId);
+        // 2. Assert the payload matches the actual transaction reference
+        assertThat(resultEvent.referenceId()).isEqualTo(expectedReferenceId);
         assertThat(resultEvent.type()).isEqualTo(type);
         assertThat(resultEvent.status()).isEqualTo(expectedStatus);
         assertThat(resultEvent.timestamp()).isNotNull();
