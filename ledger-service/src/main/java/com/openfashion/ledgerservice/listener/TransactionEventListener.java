@@ -1,5 +1,6 @@
 package com.openfashion.ledgerservice.listener;
 
+import com.openfashion.ledgerservice.core.exceptions.AccountInactiveException;
 import com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException;
 import com.openfashion.ledgerservice.core.exceptions.DbTimeoutException;
 import com.openfashion.ledgerservice.core.exceptions.MissingSystemAccountException;
@@ -118,7 +119,7 @@ public class TransactionEventListener {
 
                 try {
                     validRequests.add(strategy.mapToRequest(event));
-                } catch (AccountNotFoundException | MissingSystemAccountException e) {
+                } catch (AccountNotFoundException | MissingSystemAccountException | AccountInactiveException e) {
                     log.warn("Account resolution failed for referenceId={}: {}", event.referenceId(), e.getMessage());
                     dlqPublisher.publishMalformedToDlq(recordContext);
                 }

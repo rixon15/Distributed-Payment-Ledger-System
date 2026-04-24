@@ -1,10 +1,13 @@
 package com.openfashion.ledgerservice.service.strategy;
 
+import com.openfashion.ledgerservice.core.exceptions.AccountInactiveException;
 import com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException;
 import com.openfashion.ledgerservice.core.exceptions.MissingSystemAccountException;
 import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
+import com.openfashion.ledgerservice.model.Account;
+import com.openfashion.ledgerservice.model.AccountStatus;
 import com.openfashion.ledgerservice.model.CurrencyType;
 import com.openfashion.ledgerservice.model.TransactionType;
 import com.openfashion.ledgerservice.repository.AccountRepository;
@@ -52,9 +55,14 @@ public abstract class LedgerStrategy {
      */
     protected UUID resolveUserAccount(UUID userId, CurrencyType currencyType) {
 
-        return accountRepository.findByUserIdAndCurrency(userId, currencyType)
-                .orElseThrow(() -> new AccountNotFoundException(userId))
-                .getId();
+        Account account = accountRepository.findByUserIdAndCurrency(userId, currencyType)
+                .orElseThrow(() -> new AccountNotFoundException(userId));
+
+        if (account.getStatus() != AccountStatus.ACTIVE) {
+            throw new AccountInactiveException(account.getId());
+        }
+
+        return account.getId();
 
     }
 

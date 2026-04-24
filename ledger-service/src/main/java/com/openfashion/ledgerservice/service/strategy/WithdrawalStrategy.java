@@ -39,10 +39,10 @@ public class WithdrawalStrategy extends LedgerStrategy {
 
     @Override
     public boolean isValidTransaction(TransactionInitiatedEvent event) {
-        return event.payload().receiverId() == null &&
+        return  event.payload().senderId() != null &&
+                event.payload().receiverId().equals(event.payload().senderId()) &&
                 event.payload().amount() != null &&
-                event.payload().amount().compareTo(BigDecimal.ZERO) > 0 &&
-                event.payload().senderId() != null;
+                event.payload().amount().compareTo(BigDecimal.ZERO) > 0;
     }
 
     /**
