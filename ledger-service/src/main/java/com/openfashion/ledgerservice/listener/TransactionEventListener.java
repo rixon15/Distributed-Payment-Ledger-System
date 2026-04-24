@@ -112,6 +112,7 @@ public class TransactionEventListener {
                 if (!strategy.isValidTransaction(event)) {
                     log.warn("Business validation failed for referenceId={}", event.referenceId());
                     validationFailures.add(strategy.createRejectedRequest(event));
+                    dlqPublisher.publishBusinessViolationMessageToDlq(recordContext);
                     return;
                 }
 

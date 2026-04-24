@@ -1,5 +1,6 @@
 package com.openfashion.ledgerservice.service.imp;
 
+import com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException;
 import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.event.TransactionResultEvent;
@@ -153,8 +154,11 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
                     decideMessage(reason)
             );
 
+            Account senderAccount = accountRepository.findByUserIdAndCurrency(request.getSenderId(), request.getCurrency())
+                    .orElseThrow(() -> new AccountNotFoundException(request.getSenderId()));
+
             transactions.add(createTransaction(request, reason));
-            outboxEvents.add(createOutboxEvent(request, request.getDebitAccountId(), resultEvent));
+            outboxEvents.add(createOutboxEvent(request, senderAccount.getId(), resultEvent));
         }
 
         if (transactions.isEmpty()) {

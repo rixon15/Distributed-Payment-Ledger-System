@@ -76,7 +76,7 @@ public abstract class LedgerStrategy {
         request.setAmount(MoneyUtil.format(event.payload().amount()));
         request.setCurrency(event.payload().currency());
 
-        log.info("Mapped Rejeected Request for reference: {}", event.referenceId());
+        log.info("Mapped Rejected Request for reference: {}", event.referenceId());
 
         return request;
     }
