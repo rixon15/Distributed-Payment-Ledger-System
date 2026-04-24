@@ -69,7 +69,7 @@ public abstract class LedgerStrategy {
 
     public TransactionRequest createRejectedRequest(TransactionInitiatedEvent event) {
         TransactionRequest request = new TransactionRequest();
-        request.setReceiverId(event.referenceId());
+        request.setReferenceId(event.referenceId());
         request.setType(event.eventType());
         request.setSenderId(event.payload().senderId());
         request.setReceiverId(event.payload().receiverId());
