@@ -32,7 +32,7 @@ public abstract class LedgerStrategy {
     /**
      * Checks if the transaction request is valid based on the business rules
      */
-    public abstract boolean isValid(TransactionRequest transactionRequest);
+    public abstract boolean isValidTransaction(TransactionInitiatedEvent transactionInitiatedEvent);
 
     /**
      * Maps an inbound event into a normalized request with resolved debit/credit account ids.

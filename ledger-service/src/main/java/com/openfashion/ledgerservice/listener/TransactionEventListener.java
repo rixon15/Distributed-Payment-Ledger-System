@@ -1,6 +1,8 @@
 package com.openfashion.ledgerservice.listener;
 
+import com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException;
 import com.openfashion.ledgerservice.core.exceptions.DbTimeoutException;
+import com.openfashion.ledgerservice.core.exceptions.MissingSystemAccountException;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.consumer.BatchToken;
 import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
@@ -110,7 +112,18 @@ public class TransactionEventListener {
                             return null;
                         }
 
-                        return strategy.mapToRequest(event);
+                        if (!strategy.isValidTransaction(event)) {
+                            dlqPublisher.publishBusinessViolationMessageToDlq(recordContext);
+                            return null;
+                        }
+
+                        try {
+                            return strategy.mapToRequest(event);
+                        } catch (AccountNotFoundException | MissingSystemAccountException e) {
+                            log.warn("Account resolution failed for referenceId={}: {}", event.referenceId(), e.getMessage());
+                            dlqPublisher.publishBusinessViolationMessageToDlq(recordContext);
+                            return null;
+                        }
 
                     })
                     .filter(Objects::nonNull)

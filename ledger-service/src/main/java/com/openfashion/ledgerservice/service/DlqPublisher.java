@@ -10,4 +10,5 @@ public interface DlqPublisher {
     void publishUnsupportedTypeToDlq(RecordContext<String, TransactionInitiatedEvent> recordContext,
                                      String eventType);
 
+    void publishBusinessViolationMessageToDlq(RecordContext<String, TransactionInitiatedEvent> recordContext);
 }

@@ -7,6 +7,8 @@ import com.openfashion.ledgerservice.model.TransactionType;
 import com.openfashion.ledgerservice.repository.AccountRepository;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+
 /**
  * Maps user-to-user transfer/payment events into direct debit/credit postings.
  */
@@ -24,6 +26,15 @@ public class TransferStrategy extends LedgerStrategy {
     public boolean supports(TransactionType transactionType) {
         return transactionType == TransactionType.TRANSFER ||
                 transactionType == TransactionType.PAYMENT;
+    }
+
+    @Override
+    public boolean isValidTransaction(TransactionInitiatedEvent event) {
+
+        return event.payload().senderId() != null &&
+                event.payload().receiverId() != null &&
+                event.payload().receiverId().compareTo(event.payload().senderId()) != 0 &&
+                event.payload().amount().compareTo(BigDecimal.ZERO) > 0;
     }
 
     /**
