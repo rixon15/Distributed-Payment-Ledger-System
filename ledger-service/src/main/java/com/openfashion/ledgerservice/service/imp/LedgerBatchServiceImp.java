@@ -61,13 +61,6 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         log.info("Warmed {} accounts into Redis", allAccounts.size());
     }
 
-    /**
-     * Persists accepted ledger requests as posted transactions, postings, and outbox result events.
-     *
-     * <p>Requests missing debit/credit accounts are skipped and logged as data mismatch candidates.
-     *
-     * @param batch accepted requests from Redis staging
-     */
     @Override
     @Transactional
     public void saveTransactions(List<TransactionRequest> batch) {
@@ -118,43 +111,54 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         log.info("Persisted batch of {} transactions to Postgres.", batch.size());
     }
 
-    /**
-     * Persists NSF rejections as {@code REJECTED_NSF} transactions and emits response outbox events.
-     *
-     * <p>Duplicates are ignored using transaction reference/type lookup.
-     *
-     * @param nsfList requests rejected during Redis pre-validation
-     */
     @Override
     @Transactional
-    public void persistRejectedNsf(List<TransactionRequest> nsfList) {
+    public void persistRejected(List<TransactionRequest> rejectedList, TransactionStatus reason) {
 
-        if (nsfList.isEmpty()) {
+        if (rejectedList == null || rejectedList.isEmpty()) {
             return;
         }
+
+        Set<UUID> referenceIds = rejectedList.stream()
+                .map(TransactionRequest::getReferenceId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        Set<String> existingTxSignatures = transactionRepository.findAllByReferenceIdIn(referenceIds).stream()
+                .map(tx -> tx.getReferenceId().toString() + "_" + tx.getType().name())
+                .collect(Collectors.toSet());
+
+        Set<UUID> senderIds = rejectedList.stream()
+                .map(TransactionRequest::getSenderId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        List<Account> accountList = senderIds.isEmpty() ? List.of() : accountRepository.findByUserIdIn(senderIds);
+
 
         List<OutboxEvent> outboxEvents = new ArrayList<>();
         List<Transaction> transactions = new ArrayList<>();
 
-        for (TransactionRequest request : nsfList) {
+        for (TransactionRequest request : rejectedList) {
 
-            Optional<Transaction> existingTransaction = transactionRepository.findByReferenceIdAndType(request.getReferenceId(), request.getType());
+            String signature = request.getReferenceId().toString() + "_" + request.getType().name();
 
-            if (existingTransaction.isPresent()) {
-                log.warn("Duplicate NSF transaction detected for referenceId: {}, type: {}. Skipping.",
+            if (existingTxSignatures.contains(signature)) {
+                log.warn("Duplicate REJECTED transaction detected for referenceId: {}, type: {}. Skipping.",
                         request.getReferenceId(), request.getType());
+
                 continue;
             }
 
             TransactionResultEvent resultEvent = createTransactionResultEvent(
-                    request,
-                    TransactionStatus.REJECTED_NSF,
-                    "NSF",
-                    "Transaction rejected due to insufficient funds"
+                    request, reason, decideReasonCode(reason), decideMessage(reason)
             );
 
-            transactions.add(createTransaction(request, TransactionStatus.REJECTED_NSF));
-            outboxEvents.add(createOutboxEvent(request, request.getDebitAccountId(), resultEvent));
+            UUID aggregateKey = resolveSafeAggregateKey(request, accountList);
+
+            transactions.add(createTransaction(request, reason));
+            outboxEvents.add(createOutboxEvent(request, aggregateKey, resultEvent));
+
         }
 
         if (transactions.isEmpty()) {
@@ -179,15 +183,6 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         outboxRepository.saveAll(insertedOutboxEvents);
     }
 
-    /**
-     * Applies idempotent batch persistence flow:
-     * upsert transactions, keep only newly inserted indices, persist dependent postings/outbox events,
-     * update DB balances, then sync confirmed net changes to Redis.
-     *
-     * @param transactions candidate transactions for upsert
-     * @param postings postings aligned to the transaction list
-     * @param outboxEvents response events aligned to the transaction list
-     */
     public void processBatch(List<Transaction> transactions, List<Posting> postings, List<OutboxEvent> outboxEvents) {
 
         int[] upsertResult = transactionBatchRepository.upsertTransactions(transactions);
@@ -274,5 +269,57 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
                 .metadata(serialize(request))
                 .createdAt(Instant.now())
                 .build();
+    }
+
+    private String decideReasonCode(TransactionStatus status) {
+        switch (status) {
+            case REJECTED_NSF -> {
+                return "NSF";
+            }
+            case REJECTED_VALIDATION -> {
+                return "VALIDATION";
+            }
+            case null, default -> {
+                return "UNKNOWN";
+            }
+        }
+    }
+
+    private String decideMessage(TransactionStatus status) {
+        switch (status) {
+            case REJECTED_NSF -> {
+                return "Transaction rejected due to insufficient funds";
+            }
+            case REJECTED_VALIDATION -> {
+                return "Transaction rejected due to business violation";
+            }
+            case null, default -> {
+                return "Unknown error";
+            }
+        }
+    }
+
+    private UUID resolveSafeAggregateKey(TransactionRequest request, List<Account> accountList) {
+
+        if (request.getDebitAccountId() != null) {
+            return request.getDebitAccountId();
+        }
+
+        if (request.getSenderId() != null && request.getCurrency() != null) {
+            Optional<UUID> matchedAccountId = accountList.stream()
+                    .filter(a -> a.getUserId().equals(request.getSenderId()) && a.getCurrency() == request.getCurrency())
+                    .map(Account::getId)
+                    .findFirst();
+
+            if (matchedAccountId.isPresent()) {
+                return matchedAccountId.get();
+            }
+        }
+
+        if (request.getSenderId() != null) {
+            return request.getSenderId();
+        }
+
+        return request.getReceiverId() != null ? request.getReferenceId() : UUID.randomUUID();
     }
 }
