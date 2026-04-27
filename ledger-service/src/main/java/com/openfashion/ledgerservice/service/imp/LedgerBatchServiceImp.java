@@ -61,13 +61,6 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         log.info("Warmed {} accounts into Redis", allAccounts.size());
     }
 
-    /**
-     * Persists accepted ledger requests as posted transactions, postings, and outbox result events.
-     *
-     * <p>Requests missing debit/credit accounts are skipped and logged as data mismatch candidates.
-     *
-     * @param batch accepted requests from Redis staging
-     */
     @Override
     @Transactional
     public void saveTransactions(List<TransactionRequest> batch) {
@@ -190,15 +183,6 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         outboxRepository.saveAll(insertedOutboxEvents);
     }
 
-    /**
-     * Applies idempotent batch persistence flow:
-     * upsert transactions, keep only newly inserted indices, persist dependent postings/outbox events,
-     * update DB balances, then sync confirmed net changes to Redis.
-     *
-     * @param transactions candidate transactions for upsert
-     * @param postings postings aligned to the transaction list
-     * @param outboxEvents response events aligned to the transaction list
-     */
     public void processBatch(List<Transaction> transactions, List<Posting> postings, List<OutboxEvent> outboxEvents) {
 
         int[] upsertResult = transactionBatchRepository.upsertTransactions(transactions);
