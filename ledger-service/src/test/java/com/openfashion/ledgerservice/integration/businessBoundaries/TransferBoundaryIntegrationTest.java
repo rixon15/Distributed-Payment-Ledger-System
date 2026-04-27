@@ -1,4 +1,4 @@
-package com.openfashion.ledgerservice.integration.e2e;
+package com.openfashion.ledgerservice.integration.businessBoundaries;
 
 import com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException;
 import com.openfashion.ledgerservice.core.exceptions.TransactionNotFoundException;
@@ -45,8 +45,6 @@ class TransferBoundaryIntegrationTest extends AbstractIntegrationTest {
     private static final String TRANSACTION_REQUEST_TOPIC = "transaction.request";
 
     private Account userAUsd;
-    private Account userBUsd;
-    private Account userBEur;
     private final UUID userAId = UUID.randomUUID();
     private final UUID userBId = UUID.randomUUID();
 
@@ -82,14 +80,14 @@ class TransferBoundaryIntegrationTest extends AbstractIntegrationTest {
                 new BigDecimal("100.0000")
         );
 
-        userBUsd = createUserAccount(
+        createUserAccount(
                 "wallet-b-usd",
                 userBId,
                 CurrencyType.USD,
                 new BigDecimal("25.0000")
         );
 
-        userBEur = createUserAccount(
+        createUserAccount(
                 "wallet-b-eur",
                 userBId,
                 CurrencyType.EUR,

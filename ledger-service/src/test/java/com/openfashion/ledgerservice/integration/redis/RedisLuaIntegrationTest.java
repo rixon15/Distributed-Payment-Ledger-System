@@ -60,14 +60,15 @@ class RedisLuaIntegrationTest extends AbstractIntegrationTest {
         jdbcTemplate.execute(
                 "TRUNCATE TABLE postings, outbox_events, transactions, accounts CASCADE"
         );
-        redisTemplate.delete(List.of(
-                IDEMPOTENCY_KEY,
-                DB_SNAPSHOT_KEY,
-                PENDING_DELTA_KEY,
-                STREAM_KEY,
-                DLQ_STREAM_KEY,
-                BATCH_DONE_STREAM
-        ));
+        //mommentan commented out, the clean up is not needed at the current time.
+//        redisTemplate.delete(List.of(
+//                IDEMPOTENCY_KEY,
+//                DB_SNAPSHOT_KEY,
+//                PENDING_DELTA_KEY,
+//                STREAM_KEY,
+//                DLQ_STREAM_KEY,
+//                BATCH_DONE_STREAM
+//        ));
     }
 
     @PreDestroy
@@ -145,7 +146,6 @@ class RedisLuaIntegrationTest extends AbstractIntegrationTest {
             start.countDown();
 
 
-
             for (Future<Map<String, List<TransactionRequest>>> future : futures) {
                 Map<String, List<TransactionRequest>> result = future.get(10, TimeUnit.SECONDS);
                 allOk.addAll(result.getOrDefault("ok", List.of()));
@@ -184,7 +184,7 @@ class RedisLuaIntegrationTest extends AbstractIntegrationTest {
         Map<String, List<TransactionRequest>> r1;
         Map<String, List<TransactionRequest>> r2;
 
-        try(ExecutorService pool = Executors.newFixedThreadPool(2)) {
+        try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
             CountDownLatch ready = new CountDownLatch(2);
             CountDownLatch start = new CountDownLatch(1);
 
@@ -277,7 +277,7 @@ class RedisLuaIntegrationTest extends AbstractIntegrationTest {
         List<TransactionRequest> nsf = results.getOrDefault("nsf", List.of());
 
         if (!nsf.isEmpty()) {
-            ledgerBatchService.persistRejectedNsf(nsf);
+            ledgerBatchService.persistRejected(nsf, TransactionStatus.REJECTED_NSF);
         }
 
         if (!ok.isEmpty()) {
