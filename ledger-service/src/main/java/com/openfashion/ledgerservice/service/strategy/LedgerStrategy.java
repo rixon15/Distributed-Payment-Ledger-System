@@ -1,13 +1,18 @@
 package com.openfashion.ledgerservice.service.strategy;
 
+import com.openfashion.ledgerservice.core.exceptions.AccountInactiveException;
 import com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException;
 import com.openfashion.ledgerservice.core.exceptions.MissingSystemAccountException;
+import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
+import com.openfashion.ledgerservice.model.Account;
+import com.openfashion.ledgerservice.model.AccountStatus;
 import com.openfashion.ledgerservice.model.CurrencyType;
 import com.openfashion.ledgerservice.model.TransactionType;
 import com.openfashion.ledgerservice.repository.AccountRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.UUID;
 
@@ -18,6 +23,7 @@ import java.util.UUID;
  * (or set of related types) and resolves concrete account ids before persistence.
  */
 @RequiredArgsConstructor
+@Slf4j
 public abstract class LedgerStrategy {
 
     protected final AccountRepository accountRepository;
@@ -28,6 +34,11 @@ public abstract class LedgerStrategy {
      * Returns whether this strategy handles the given transaction type.
      */
     public abstract boolean supports(TransactionType transactionType);
+
+    /**
+     * Checks if the transaction request is valid based on the business rules
+     */
+    public abstract boolean isValidTransaction(TransactionInitiatedEvent transactionInitiatedEvent);
 
     /**
      * Maps an inbound event into a normalized request with resolved debit/credit account ids.
@@ -44,9 +55,14 @@ public abstract class LedgerStrategy {
      */
     protected UUID resolveUserAccount(UUID userId, CurrencyType currencyType) {
 
-        return accountRepository.findByUserIdAndCurrency(userId, currencyType)
-                .orElseThrow(() -> new AccountNotFoundException(userId))
-                .getId();
+        Account account = accountRepository.findByUserIdAndCurrency(userId, currencyType)
+                .orElseThrow(() -> new AccountNotFoundException(userId));
+
+        if (account.getStatus() != AccountStatus.ACTIVE) {
+            throw new AccountInactiveException(account.getId());
+        }
+
+        return account.getId();
 
     }
 
@@ -58,4 +74,23 @@ public abstract class LedgerStrategy {
                 .orElseThrow(() -> new MissingSystemAccountException(systemAccountName))
                 .getId();
     }
+
+    protected TransactionType resolveTransactonType(TransactionInitiatedEvent event) {
+        return event.eventType();
+    }
+
+    public TransactionRequest createRejectedRequest(TransactionInitiatedEvent event) {
+        TransactionRequest request = new TransactionRequest();
+        request.setReferenceId(event.referenceId());
+        request.setType(resolveTransactonType(event));
+        request.setSenderId(event.payload().senderId());
+        request.setReceiverId(event.payload().receiverId());
+        request.setAmount(MoneyUtil.format(event.payload().amount()));
+        request.setCurrency(event.payload().currency());
+
+        log.info("Mapped Rejected Request for reference: {}", event.referenceId());
+
+        return request;
+    }
+
 }
