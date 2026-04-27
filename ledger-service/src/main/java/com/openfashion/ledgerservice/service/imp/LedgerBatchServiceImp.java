@@ -1,6 +1,5 @@
 package com.openfashion.ledgerservice.service.imp;
 
-import com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException;
 import com.openfashion.ledgerservice.core.util.MoneyUtil;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.event.TransactionResultEvent;
@@ -119,47 +118,54 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
         log.info("Persisted batch of {} transactions to Postgres.", batch.size());
     }
 
-    //    /**
-//     * Persists NSF rejections as {@code REJECTED_NSF} transactions and emits response outbox events.
-//     *
-//     * <p>Duplicates are ignored using transaction reference/type lookup.
-//     *
-//     * @param nsfList requests rejected during Redis pre-validation
-//     */
     @Override
     @Transactional
     public void persistRejected(List<TransactionRequest> rejectedList, TransactionStatus reason) {
 
-        if (rejectedList.isEmpty()) {
+        if (rejectedList == null || rejectedList.isEmpty()) {
             return;
         }
+
+        Set<UUID> referenceIds = rejectedList.stream()
+                .map(TransactionRequest::getReferenceId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        Set<String> existingTxSignatures = transactionRepository.findAllByReferenceIdIn(referenceIds).stream()
+                .map(tx -> tx.getReferenceId().toString() + "_" + tx.getType().name())
+                .collect(Collectors.toSet());
+
+        Set<UUID> senderIds = rejectedList.stream()
+                .map(TransactionRequest::getSenderId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        List<Account> accountList = senderIds.isEmpty() ? List.of() : accountRepository.findByUserIdIn(senderIds);
+
 
         List<OutboxEvent> outboxEvents = new ArrayList<>();
         List<Transaction> transactions = new ArrayList<>();
 
         for (TransactionRequest request : rejectedList) {
 
-            Optional<Transaction> existingTransaction = transactionRepository.findByReferenceIdAndType(request.getReferenceId(), request.getType());
+            String signature = request.getReferenceId().toString() + "_" + request.getType().name();
 
-            if (existingTransaction.isPresent()) {
+            if (existingTxSignatures.contains(signature)) {
                 log.warn("Duplicate REJECTED transaction detected for referenceId: {}, type: {}. Skipping.",
                         request.getReferenceId(), request.getType());
+
                 continue;
             }
 
             TransactionResultEvent resultEvent = createTransactionResultEvent(
-                    request,
-                    reason,
-                    decideReasonCode(reason),
-                    decideMessage(reason)
+                    request, reason, decideReasonCode(reason), decideMessage(reason)
             );
 
-            Optional<Account> senderAccount = accountRepository.findByUserIdAndCurrency(request.getSenderId(), request.getCurrency());
-
-            UUID aggregateKey = senderAccount.map(Account::getId).orElse(request.getSenderId());
+            UUID aggregateKey = resolveSafeAggregateKey(request, accountList);
 
             transactions.add(createTransaction(request, reason));
             outboxEvents.add(createOutboxEvent(request, aggregateKey, resultEvent));
+
         }
 
         if (transactions.isEmpty()) {
@@ -307,5 +313,29 @@ public class LedgerBatchServiceImp implements LedgerBatchService {
                 return "Unknown error";
             }
         }
+    }
+
+    private UUID resolveSafeAggregateKey(TransactionRequest request, List<Account> accountList) {
+
+        if (request.getDebitAccountId() != null) {
+            return request.getDebitAccountId();
+        }
+
+        if (request.getSenderId() != null && request.getCurrency() != null) {
+            Optional<UUID> matchedAccountId = accountList.stream()
+                    .filter(a -> a.getUserId().equals(request.getSenderId()) && a.getCurrency() == request.getCurrency())
+                    .map(Account::getId)
+                    .findFirst();
+
+            if (matchedAccountId.isPresent()) {
+                return matchedAccountId.get();
+            }
+        }
+
+        if (request.getSenderId() != null) {
+            return request.getSenderId();
+        }
+
+        return request.getReceiverId() != null ? request.getReferenceId() : UUID.randomUUID();
     }
 }

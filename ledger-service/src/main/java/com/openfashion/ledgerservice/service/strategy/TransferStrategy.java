@@ -34,6 +34,7 @@ public class TransferStrategy extends LedgerStrategy {
         return event.payload().senderId() != null &&
                 event.payload().receiverId() != null &&
                 event.payload().receiverId().compareTo(event.payload().senderId()) != 0 &&
+                event.payload().amount() != null &&
                 event.payload().amount().compareTo(BigDecimal.ZERO) > 0;
     }
 

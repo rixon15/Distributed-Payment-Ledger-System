@@ -38,8 +38,20 @@ public class WithdrawalStrategy extends LedgerStrategy {
     }
 
     @Override
+    protected TransactionType resolveTransactonType(TransactionInitiatedEvent event) {
+        return switch (event.payload().status()) {
+            case PENDING -> TransactionType.WITHDRAWAL_RESERVE;
+            case POSTED -> TransactionType.WITHDRAWAL_SETTLE;
+            case REJECTED_VALIDATION, REJECTED_INACTIVE, REJECTED_NSF, REJECTED_RISK, FAILED ->
+                    TransactionType.WITHDRAWAL_RELEASE;
+            default -> throw new IllegalArgumentException("Unknown status for withdrawal: " + event.payload().status());
+        };
+    }
+
+    @Override
     public boolean isValidTransaction(TransactionInitiatedEvent event) {
-        return  event.payload().senderId() != null &&
+        return event.payload().senderId() != null &&
+                event.payload().receiverId() != null &&
                 event.payload().receiverId().equals(event.payload().senderId()) &&
                 event.payload().amount() != null &&
                 event.payload().amount().compareTo(BigDecimal.ZERO) > 0;

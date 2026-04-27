@@ -75,10 +75,14 @@ public abstract class LedgerStrategy {
                 .getId();
     }
 
+    protected TransactionType resolveTransactonType(TransactionInitiatedEvent event) {
+        return event.eventType();
+    }
+
     public TransactionRequest createRejectedRequest(TransactionInitiatedEvent event) {
         TransactionRequest request = new TransactionRequest();
         request.setReferenceId(event.referenceId());
-        request.setType(event.eventType());
+        request.setType(resolveTransactonType(event));
         request.setSenderId(event.payload().senderId());
         request.setReceiverId(event.payload().receiverId());
         request.setAmount(MoneyUtil.format(event.payload().amount()));
