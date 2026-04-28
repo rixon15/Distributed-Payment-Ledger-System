@@ -104,12 +104,171 @@ class DepositBoundaryIntegrationTest extends AbstractIntegrationTest {
         assertTransactionStatus(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.DEPOSIT);
         assertNoPostingsForReference(event.referenceId());
         assertOutboxExists(
-                userId,
                 event.referenceId(),
                 TransactionStatus.REJECTED_VALIDATION,
                 TransactionType.DEPOSIT
         );
         assertThat(accountBalance(userId, CurrencyType.USD)).isEqualByComparingTo(originalBalance);
+    }
+
+    @Test
+    void negativeAmount_deposit_isRejectedValidation_adndNoMutation() {
+        BigDecimal originalBalance = accountBalance(userId, CurrencyType.USD);
+
+        TransactionInitiatedEvent event = depositEvent(
+                UUID.randomUUID(),
+                userId,
+                new BigDecimal("-10.0000"),
+                CurrencyType.USD
+        );
+
+        publishTransactionRequest(event);
+        awaitTerminalState(event.referenceId(), WAIT_TIMEOUT);
+
+        assertTransactionStatus(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.DEPOSIT);
+        assertNoPostingsForReference(event.referenceId());
+        assertOutboxExists(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.DEPOSIT);
+        assertThat(accountBalance(userId, CurrencyType.USD)).isEqualByComparingTo(originalBalance);
+    }
+
+    @Test
+    void missingSenderId_deposit_isRejectedValidation() {
+
+        TransactionInitiatedEvent event = depositEvent(
+                UUID.randomUUID(),
+                null,
+                new BigDecimal("10.0000"),
+                CurrencyType.USD
+        );
+
+        publishTransactionRequest(event);
+        awaitTerminalState(event.referenceId(), WAIT_TIMEOUT);
+
+        assertTransactionStatus(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.DEPOSIT);
+        assertNoPostingsForReference(event.referenceId());
+        assertOutboxExists(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.DEPOSIT);
+
+    }
+
+    @Test
+    void missingUserUsdAccount_deposit_isRejectedValidation_andNoMutation() {
+        UUID euroOnlyUserId = UUID.randomUUID();
+
+        createUserAccount(
+                "wallet-user-eur",
+                euroOnlyUserId,
+                CurrencyType.EUR,
+                new BigDecimal("10.0000")
+        );
+
+        BigDecimal originalAmount = accountBalance(euroOnlyUserId, CurrencyType.EUR);
+
+        TransactionInitiatedEvent event = depositEvent(
+                UUID.randomUUID(),
+                euroOnlyUserId,
+                new BigDecimal("50.0000"),
+                CurrencyType.USD
+        );
+
+        publishTransactionRequest(event);
+        awaitTerminalState(event.referenceId(), WAIT_TIMEOUT);
+
+        assertTransactionStatus(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.DEPOSIT);
+        assertNoPostingsForReference(event.referenceId());
+        assertOutboxExists(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.DEPOSIT);
+        assertThat(accountBalance(euroOnlyUserId, CurrencyType.EUR)).isEqualByComparingTo(originalAmount);
+
+    }
+
+    @Test
+    void validDeposit_posts_asControlCase() {
+
+        TransactionInitiatedEvent event = depositEvent(
+                UUID.randomUUID(),
+                userId,
+                new BigDecimal("100.0000"),
+                CurrencyType.USD
+        );
+
+
+        publishTransactionRequest(event);
+        awaitTerminalState(event.referenceId(), WAIT_TIMEOUT);
+
+        assertTransactionStatus(event.referenceId(), TransactionStatus.POSTED, TransactionType.DEPOSIT);
+        assertThat(accountBalance(userId, CurrencyType.USD)).isEqualByComparingTo("100.0000");
+        assertPostingCountForReference(event.referenceId(), 2);
+        assertOutboxExists(event.referenceId(), TransactionStatus.POSTED, TransactionType.DEPOSIT);
+
+    }
+
+    @Test
+    void missingWorldLiquidityAccount_deposit_isRejectedValidation() {
+        accountRepository.delete(worldAccount);
+
+        TransactionInitiatedEvent event = depositEvent(
+                UUID.randomUUID(),
+                userId,
+                new BigDecimal("50.0000"),
+                CurrencyType.USD
+        );
+
+        publishTransactionRequest(event);
+        awaitTerminalState(event.referenceId(), WAIT_TIMEOUT);
+
+        assertTransactionStatus(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.DEPOSIT);
+        assertNoPostingsForReference(event.referenceId());
+        assertOutboxExists(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.DEPOSIT);
+        assertThat(accountBalance(userId, CurrencyType.USD)).isEqualByComparingTo("0.0000");
+    }
+
+    @Test
+    void inactiveSenderAccount_deposit_isRejectedValidation() {
+
+        userUsd.setStatus(AccountStatus.FROZEN);
+        accountRepository.save(userUsd);
+
+        BigDecimal originalBalance = accountBalance(userId, CurrencyType.USD);
+
+        TransactionInitiatedEvent event = depositEvent(
+                UUID.randomUUID(),
+                userId,
+                new BigDecimal("75.0000"),
+                CurrencyType.USD
+        );
+
+        publishTransactionRequest(event);
+        awaitTerminalState(event.referenceId(), WAIT_TIMEOUT);
+
+        assertTransactionStatus(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.DEPOSIT);
+        assertNoPostingsForReference(event.referenceId());
+        assertOutboxExists(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.DEPOSIT);
+        assertThat(accountBalance(userId, CurrencyType.USD)).isEqualByComparingTo(originalBalance);
+
+    }
+
+    @Test
+    void deposit_wrongCurrencyForExitingUser_isRejectedValidation() {
+
+        TransactionInitiatedEvent event = depositEvent(
+                UUID.randomUUID(),
+                userId,
+                new BigDecimal("50.0000"),
+                CurrencyType.EUR
+        );
+
+        publishTransactionRequest(event);
+        awaitTerminalState(event.referenceId(), WAIT_TIMEOUT);
+
+        assertTransactionStatus(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.DEPOSIT);
+        assertNoPostingsForReference(event.referenceId());
+        assertOutboxExists(event.referenceId(), TransactionStatus.REJECTED_VALIDATION, TransactionType.DEPOSIT);
+        assertThat(accountBalance(userId, CurrencyType.USD)).isEqualByComparingTo("0.0000");
+
+    }
+
+    private void assertPostingCountForReference(UUID referenceId, int expectedAmount) {
+        List<Posting> postings = postingRepository.findAllByTransactionReferenceId(referenceId);
+        assertThat(postings).hasSize(expectedAmount);
     }
 
     private TransactionInitiatedEvent depositEvent(
@@ -220,31 +379,32 @@ class DepositBoundaryIntegrationTest extends AbstractIntegrationTest {
         assertThat(postings).isEmpty();
     }
 
-    private void assertOutboxExists(
-            UUID expectedAggregateId,
-            UUID expectedReferenceId,
-            TransactionStatus expectedStatus,
-            TransactionType type) {
-
+    private void assertOutboxExists(UUID referenceId, TransactionStatus expectedStatus, TransactionType type) {
         OutboxEvent outbox = outboxRepository.findAll().stream()
-                // 1. Find it by the Kafka Partition Key (Account ID)
-                .filter(e -> expectedAggregateId.toString().equals(e.getAggregateId()))
                 .filter(e -> e.getEventType() == type)
+                .filter(e -> {
+                    try {
+                        TransactionResultEvent event =
+                                objectMapper.readValue(e.getPayload(), TransactionResultEvent.class);
+                        return event.referenceId().equals(referenceId);
+                    } catch (Exception ex) {
+                        return false;
+                    }
+                })
                 .findFirst()
-                .orElseThrow(() -> new AssertionFailure("No outbox event found for aggregateId=" + expectedAggregateId));
+                .orElseThrow(() -> new AssertionFailure("No outbox event found for referenceId=" + referenceId));
 
-        TransactionResultEvent resultEvent;
         try {
-            resultEvent = objectMapper.readValue(outbox.getPayload(), TransactionResultEvent.class);
-        } catch (Exception _) {
-            throw new AssertionFailure("Failed to deserialize outbox payload");
-        }
+            TransactionResultEvent resultEvent =
+                    objectMapper.readValue(outbox.getPayload(), TransactionResultEvent.class);
 
-        // 2. Assert the payload matches the actual transaction reference
-        assertThat(resultEvent.referenceId()).isEqualTo(expectedReferenceId);
-        assertThat(resultEvent.type()).isEqualTo(type);
-        assertThat(resultEvent.status()).isEqualTo(expectedStatus);
-        assertThat(resultEvent.timestamp()).isNotNull();
+            assertThat(resultEvent.referenceId()).isEqualTo(referenceId);
+            assertThat(resultEvent.type()).isEqualTo(type);
+            assertThat(resultEvent.status()).isEqualTo(expectedStatus);
+            assertThat(resultEvent.timestamp()).isNotNull();
+        } catch (Exception e) {
+            throw new AssertionFailure("Failed to deserialize outbox payload for referenceId=" + referenceId);
+        }
     }
 
     private void publishTransactionRequest(TransactionInitiatedEvent event) {

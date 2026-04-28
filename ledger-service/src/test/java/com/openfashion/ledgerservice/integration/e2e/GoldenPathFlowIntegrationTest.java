@@ -7,9 +7,11 @@ import com.openfashion.ledgerservice.repository.AccountRepository;
 import com.openfashion.ledgerservice.repository.TransactionRepository;
 import com.openfashion.ledgerservice.service.RedisService;
 import com.openfashion.ledgerservice.integration.base.AbstractIntegrationTest;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -18,6 +20,7 @@ import org.testcontainers.shaded.org.awaitility.Awaitility;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -29,6 +32,10 @@ class GoldenPathFlowIntegrationTest extends AbstractIntegrationTest {
     private static final String TOPIC = "transaction.request";
     private static final String DB_SNAPSHOT_KEY = "ledger:db:snapshot";
     private static final String PENDING_DELTA_KEY = "ledger:pending:delta";
+    private static final String IDEMPOTENCY_KEY = "ledger:idempotency:set";
+    private static final String STREAM_KEY = "ledger:stream:tx";
+    private static final String DLQ_STREAM_KEY = "ledger:stream:tx:dlq";
+    private static final String BATCH_DONE_STREAM = "ledger:stream:batch:done";
 
     @Autowired
     private KafkaTemplate<String, Object> kafkaTemplate;
@@ -45,10 +52,27 @@ class GoldenPathFlowIntegrationTest extends AbstractIntegrationTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    @BeforeEach
+    void cleanState() {
+        jdbcTemplate.execute(
+                "TRUNCATE TABLE postings, outbox_events, transactions, accounts CASCADE"
+        );
+
+        redisTemplate.delete(List.of(
+                IDEMPOTENCY_KEY,
+                DB_SNAPSHOT_KEY,
+                PENDING_DELTA_KEY
+        ));
+
+        trimStream(STREAM_KEY);
+        trimStream(DLQ_STREAM_KEY);
+        trimStream(BATCH_DONE_STREAM);
+    }
+
     @Test
     void successfulDeposit_endToEnd() throws Exception {
         UUID userId = UUID.randomUUID();
-        Account worldLiquidity = createSystemAccount("WORLD_LIQUIDITY", new BigDecimal("100000.0000"));
+        Account worldLiquidity = createSystemAccount("WORLD_LIQUIDITY", new BigDecimal("1000.0000"));
         Account user = createUserAccount(userId, "USER_WALLET", new BigDecimal("0.0000"));
 
         UUID referenceId = UUID.randomUUID();
@@ -269,6 +293,16 @@ class GoldenPathFlowIntegrationTest extends AbstractIntegrationTest {
                     assertThat(readBalance(pending.getId())).isEqualByComparingTo("0.0000");
                     assertThat(transactionRepository.findByReferenceIdAndType(referenceId, TransactionType.WITHDRAWAL_RELEASE)).isPresent();
                 });
+    }
+
+    private void trimStream(String streamKey) {
+        redisTemplate.execute((RedisCallback<Void>) connection -> {
+            byte[] key = redisTemplate.getStringSerializer().serialize(streamKey);
+            if (key != null && Boolean.TRUE.equals(connection.keyCommands().exists(key))) {
+                connection.streamCommands().xTrim(key, 0L, false);
+            }
+            return null;
+        });
     }
 
     private Account createUserAccount(UUID userId, String name, BigDecimal balance) {
