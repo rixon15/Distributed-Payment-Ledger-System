@@ -251,7 +251,6 @@ class WithdrawalBoundaryIntegrationTest extends AbstractIntegrationTest {
         publishTransactionRequest(event);
         awaitTerminalState(event.referenceId(), WAIT_TIMEOUT);
 
-        // Depending on your persistence design this may be WITHDRAWAL_RESERVE rather than WITHDRAWAL
         assertThat(transactionRepository.findByReferenceIdAndType(event.referenceId(), TransactionType.WITHDRAWAL_RESERVE))
                 .isPresent();
 
