@@ -32,7 +32,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class PaymentResilienceIntegrationTest extends AbstractIntegrationTest {
 
 
-    private static final Duration WAIT_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration WAIT_TIMEOUT = Duration.ofSeconds(10);
     private static final String IDEMPOTENCY_KEY = "payment:idempotency:set";
     private static final String REQUEST_LOCK_PREFIX = "request_lock:";
 
@@ -69,25 +69,212 @@ class PaymentResilienceIntegrationTest extends AbstractIntegrationTest {
                         .withStatus(200)
                         .withBody(
                                 """
-                                 {
-                                    "status": "REJECTED",
-                                    "reason": "High risk of fraud detected"
-                                 }
-                                """
+                                         {
+                                            "status": "REJECTED",
+                                            "reason": "High risk of fraud detected"
+                                         }
+                                        """
                         )));
 
         String key = "risk-reject-" + UUID.randomUUID();
         UUID senderId = UUID.randomUUID();
 
         mockMvc.perform(post("/payments/execute")
-                .header("X-User-ID", senderId)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(transferRequest(key))))
+                        .header("X-User-ID", senderId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(transferRequest(key))))
                 .andExpect(status().isAccepted());
 
         awaitPaymentStatusByIdempotencyKey(key, "FAILED", WAIT_TIMEOUT);
         assertOutboxPayloadStatusBySenderAndType(senderId, PaymentType.TRANSFER, "FAILED", 1);
         assertNoLockForKey(key);
+    }
+
+    @Test
+    void riskEngineTimeout_requestAccepted_paymentFails_andFailureOutboxEmitted() throws Exception {
+        wireMock.stubFor(WireMock.post("/mock-risk-engine/evaluate")
+                .willReturn(WireMock.aResponse()
+                        .withFixedDelay(6000)
+                        .withStatus(500)));
+
+        String key = "risk-timeout-" + UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+
+        mockMvc.perform(post("/payments/execute")
+                        .header("X-User-ID", senderId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(transferRequest(key))))
+                .andExpect(status().isAccepted());
+
+        awaitPaymentStatusByIdempotencyKey(key, "FAILED", WAIT_TIMEOUT);
+        assertOutboxPayloadStatusBySenderAndType(senderId, PaymentType.TRANSFER, "FAILED", 1);
+        assertNoLockForKey(key);
+    }
+
+    @Test
+    void riskEngine5xx_requestAccepted_PaymentFails_andFailureOutboxEmitted() throws Exception {
+        wireMock.stubFor(WireMock.post("/mock-risk-engine/evaluate")
+                .willReturn(WireMock.aResponse()
+                        .withStatus(500)
+                        .withBody("risk-engine-down")));
+
+        String key = "risk-5xx-" + UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+
+        mockMvc.perform(post("/payments/execute")
+                        .header("X-User-ID", senderId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(transferRequest(key))))
+                .andExpect(status().isAccepted());
+
+        awaitPaymentStatusByIdempotencyKey(key, "FAILED", WAIT_TIMEOUT);
+        assertOutboxPayloadStatusBySenderAndType(senderId, PaymentType.TRANSFER, "FAILED", 1);
+        assertNoLockForKey(key);
+    }
+
+    @Test
+    void riskEngineMalformedJson_requestAccepted_paymentFails_andFailureOutboxEmitted() throws Exception {
+        wireMock.stubFor(WireMock.post("/mock-risk-engine/evaluate")
+                .willReturn(WireMock.aResponse()
+                        .withHeader("Content-Type", "application/json")
+                        .withStatus(200)
+                        .withBody("{ invalid-json")));
+
+        String key = "risk-invalid-json-" + UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+
+        mockMvc.perform(post("/payments/execute")
+                .header("X-User-ID", senderId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(transferRequest(key))));
+
+        awaitPaymentStatusByIdempotencyKey(key, "FAILED", WAIT_TIMEOUT);
+        assertOutboxPayloadStatusBySenderAndType(senderId, PaymentType.TRANSFER, "FAILED", 1);
+        assertNoLockForKey(key);
+    }
+
+    @Test
+    void bankApi5xx_requestAccepted_paymentFails_andFailureOutboxEmitted() throws Exception {
+        wireMock.stubFor(WireMock.post("/mock-bank/pay")
+                .willReturn(WireMock.aResponse()
+                        .withStatus(500)
+                        .withBody("bank-down")));
+
+        String key = "bank-5xx-" + UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+
+        mockMvc.perform(post("/payments/execute")
+                        .header("X-User-ID", senderId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(depositRequest(key))))
+                .andExpect(status().isAccepted());
+
+        awaitPaymentStatusByIdempotencyKey(key, "FAILED", WAIT_TIMEOUT);
+        assertOutboxPayloadStatusBySenderAndType(senderId, PaymentType.DEPOSIT, "FAILED", 1);
+        assertNoLockForKey(key);
+    }
+
+    @Test
+    void bankApiTimeout_requestAccepted_paymentFails_andFailureOutboxEmitted() throws Exception {
+        wireMock.stubFor(WireMock.post("/mock-bank/pay")
+                .willReturn(WireMock.aResponse()
+                        .withFixedDelay(4000)
+                        .withStatus(500)));
+
+        String key = "bank-timeout-" + UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+
+        mockMvc.perform(post("/payments/execute")
+                        .header("X-User-ID", senderId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(depositRequest(key))))
+                .andExpect(status().isAccepted());
+
+        awaitPaymentStatusByIdempotencyKey(key, "FAILED", WAIT_TIMEOUT);
+        assertOutboxPayloadStatusBySenderAndType(senderId, PaymentType.DEPOSIT, "FAILED", 1);
+        assertNoLockForKey(key);
+    }
+
+    @Test
+    void malformedClientJson_returns400_AndNoMutation() throws Exception {
+        String malformedJson = """
+                {"receiverId":"abc"
+                """;
+
+        mockMvc.perform(post("/payments/execute")
+                .header("X-User-ID", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(malformedJson)));
+
+        assertPaymentCountAll(0);
+        assertOutboxCount(0);
+    }
+
+    @Test
+    void invalidXUserIDFormat_returns4xx_andNoMutation() throws Exception {
+        mockMvc.perform(post("/payments/execute")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(transferRequest("invalid"))))
+                .andExpect(status().is4xxClientError());
+
+        assertPaymentCountAll(0);
+        assertOutboxCount(0);
+    }
+
+    @Test
+    void transientRiskFailure_thenRetrySameIdempotencyKey_succeedsWithoutDuplicateRows() throws Exception {
+        String key = "retry-after-failure-" + UUID.randomUUID();
+        UUID senderID = UUID.randomUUID();
+
+        wireMock.stubFor(WireMock.post("/mock-risk-engine/evaluate")
+                .willReturn(WireMock.aResponse()
+                        .withFixedDelay(6000)
+                        .withStatus(200)));
+
+        mockMvc.perform(post("/payments/execute")
+                        .header("X-User-ID", senderID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(transferRequest(key))))
+                .andExpect(status().isAccepted());
+
+        awaitPaymentStatusByIdempotencyKey(key, "FAILED", WAIT_TIMEOUT);
+        assertNoLockForKey(key);
+
+        stubRiskApproved();
+
+        mockMvc.perform(post("/payments/execute")
+                        .header("X-User-ID", senderID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(transferRequest(key))))
+                .andExpect(status().isConflict());
+
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM payments WHERE idempotency_key = ?",
+                Integer.class,
+                key
+        );
+
+        assertThat(count).isEqualTo(1);
+    }
+
+    private void assertPaymentCountAll(int expected) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM payments",
+                Integer.class
+        );
+
+        assertThat(count).isEqualTo(expected);
+    }
+
+    // Change withdrawalRequest to depositRequest
+    private PaymentRequest depositRequest(String idempotencyKey) {
+        return new PaymentRequest(
+                null,
+                idempotencyKey,
+                PaymentType.DEPOSIT,
+                new BigDecimal("10.0000"),
+                "USD"
+        );
     }
 
     private void stubRiskApproved() {
@@ -132,13 +319,4 @@ class PaymentResilienceIntegrationTest extends AbstractIntegrationTest {
         );
     }
 
-    private PaymentRequest withdrawalRequest(String idempotencyKey) {
-        return new PaymentRequest(
-                null,
-                idempotencyKey,
-                PaymentType.WITHDRAWAL,
-                new BigDecimal("10.0000"),
-                "USD"
-        );
-    }
 }

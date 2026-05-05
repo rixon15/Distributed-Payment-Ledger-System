@@ -20,12 +20,10 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -204,7 +202,7 @@ class PaymentBusinessBoundaryIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void riskEngineRejects_paymentFailsSynchronously_andNoOutboxEventEmitted() throws Exception {
+    void riskEngineRejects_paymentFailsSynchronously_andFailureOutboxEventEmitted() throws Exception {
         String idempotencyKey = "risk-reject-key-" + UUID.randomUUID();
         UUID senderId = UUID.randomUUID();
 
@@ -233,7 +231,7 @@ class PaymentBusinessBoundaryIntegrationTest extends AbstractIntegrationTest {
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().is2xxSuccessful());
 
-        assertOutboxCount(0);
+        assertOutboxCount(1);
     }
 
 }

@@ -5,7 +5,6 @@ import org.example.paymentservice.dto.PaymentRequest;
 import org.example.paymentservice.model.Payment;
 import org.example.paymentservice.model.PaymentStatus;
 import org.example.paymentservice.model.PaymentType;
-import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
 import org.example.paymentservice.service.OutboxService;
 import org.example.paymentservice.simulator.bank.dto.BankPaymentResponse;
@@ -27,10 +26,10 @@ public class WithdrawStrategy extends PaymentStrategy {
 
     private final String bankUrl;
 
-    public WithdrawStrategy(PaymentRepository paymentRepository, OutboxRepository outboxRepository,
+    public WithdrawStrategy(PaymentRepository paymentRepository,
                             ObjectMapper objectMapper, TransactionTemplate tx, RestClient restClient,
                             @Value("${app.bank.url}") String bankUrl, OutboxService outboxService) {
-        super(paymentRepository, outboxRepository, objectMapper, tx, restClient, outboxService);
+        super(paymentRepository, objectMapper, tx, restClient, outboxService);
         this.bankUrl = bankUrl;
     }
 
@@ -52,13 +51,17 @@ public class WithdrawStrategy extends PaymentStrategy {
 
     private void callBankApi(Payment payment) {
 
+        BankPaymentResponse existingStatus = null;
+
         try {
-            BankPaymentResponse existingStatus = checkExternalStatus(payment.getId().toString());
+            existingStatus = checkExternalStatus(payment.getId().toString());
 
             reconcileWithBank(payment, existingStatus, bankUrl);
         } catch (Exception e) {
             log.error("Reconciliation inquiry failed for payment {}. Retrying later.", payment.getId(), e);
         }
+
+        reconcileWithBank(payment, existingStatus, bankUrl);
     }
 
     /**

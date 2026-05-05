@@ -24,17 +24,17 @@ public class MockBankController {
             return idempotencyStore.get(request.referenceId());
         }
 
-        BankPaymentResponse response = new BankPaymentResponse(
-                UUID.randomUUID(),
-                BankPaymentStatus.APPROVED,
-                "SUCCESS"
-        );
-
 //        BankPaymentResponse response = new BankPaymentResponse(
 //                UUID.randomUUID(),
-//                BankPaymentStatus.DECLINED,
-//                "DECLINE"
+//                BankPaymentStatus.APPROVED,
+//                "SUCCESS"
 //        );
+
+        BankPaymentResponse response = new BankPaymentResponse(
+                UUID.randomUUID(),
+                BankPaymentStatus.DECLINED,
+                "DECLINE"
+        );
 
         idempotencyStore.put(request.referenceId(), response);
 
