@@ -25,6 +25,7 @@ public class OutboxServiceImp implements OutboxService {
     private final ObjectMapper objectMapper;
     private final OutboxRepository outboxRepository;
 
+    @Override
     public void saveOutboxEvent(Payment payment, TransactionStatus status, String userMessage) {
         // Create Payload
         TransactionPayload payloadData = new TransactionPayload(
