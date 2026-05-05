@@ -23,11 +23,11 @@ public class MockRiskController {
             return new RiskResponse(RiskStatus.REJECTED, "Amount is too high");
         }
 
-        if (request.userId().toString().endsWith("666")) {
+//        if (request.userId().toString().endsWith("666")) {
             return new RiskResponse(RiskStatus.REJECTED, "User flagged for suspicious activity");
-        }
+//        }
 
-        return new RiskResponse(RiskStatus.APPROVED, "Verified safe transaction");
+//        return new RiskResponse(RiskStatus.APPROVED, "Verified safe transaction");
     }
 
 }

@@ -7,6 +7,7 @@ import org.example.paymentservice.model.PaymentStatus;
 import org.example.paymentservice.model.PaymentType;
 import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
+import org.example.paymentservice.service.OutboxService;
 import org.example.paymentservice.simulator.bank.dto.BankPaymentRequest;
 import org.example.paymentservice.simulator.bank.dto.BankPaymentResponse;
 import org.example.paymentservice.simulator.bank.dto.BankPaymentStatus;
@@ -32,8 +33,8 @@ public class DepositStrategy extends PaymentStrategy {
     public DepositStrategy(PaymentRepository paymentRepository, OutboxRepository outboxRepository,
                            ObjectMapper objectMapper, TransactionTemplate tx,
                            RestClient restClient,
-                           @Value("${app.bank.url}") String bankUrl) {
-        super(paymentRepository, outboxRepository, objectMapper, tx, restClient);
+                           @Value("${app.bank.url}") String bankUrl, OutboxService outboxService) {
+        super(paymentRepository, outboxRepository, objectMapper, tx, restClient, outboxService);
         this.bankUrl = bankUrl;
     }
 
