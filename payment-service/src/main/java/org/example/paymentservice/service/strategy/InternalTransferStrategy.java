@@ -7,6 +7,7 @@ import org.example.paymentservice.model.PaymentStatus;
 import org.example.paymentservice.model.PaymentType;
 import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
+import org.example.paymentservice.service.OutboxService;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
@@ -23,8 +24,8 @@ public class InternalTransferStrategy extends PaymentStrategy {
 
 
     public InternalTransferStrategy(PaymentRepository paymentRepository, OutboxRepository outboxRepository,
-                                    ObjectMapper objectMapper, TransactionTemplate tx, RestClient restClient) {
-        super(paymentRepository, outboxRepository, objectMapper, tx, restClient);
+                                    ObjectMapper objectMapper, TransactionTemplate tx, RestClient restClient, OutboxService outboxService) {
+        super(paymentRepository, outboxRepository, objectMapper, tx, restClient, outboxService);
     }
 
     /**
