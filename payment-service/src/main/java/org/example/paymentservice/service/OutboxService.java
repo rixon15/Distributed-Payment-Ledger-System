@@ -5,6 +5,6 @@ import org.example.paymentservice.model.Payment;
 
 public interface OutboxService {
 
-    public void saveOutboxEvent(Payment payment, TransactionStatus status, String userMessage);
+    void saveOutboxEvent(Payment payment, TransactionStatus status, String userMessage);
 
 }
