@@ -98,7 +98,8 @@ public class TransactionEventListener {
             context.stream().forEach(recordContext -> {
                 TransactionInitiatedEvent event = recordContext.value();
 
-                if (event == null) {
+                if (event == null || event.referenceId() == null || event.payload() == null) {
+                    log.error("Terminal Error: Malformed event received (null event, referenceId, or payload). Sending to DLQ.");
                     dlqPublisher.publishMalformedToDlq(recordContext);
                     return;
                 }
@@ -120,13 +121,18 @@ public class TransactionEventListener {
                 try {
                     validRequests.add(strategy.mapToRequest(event));
                 } catch (AccountNotFoundException | MissingSystemAccountException | AccountInactiveException e) {
+                    // BUSINESS REJECTION: The system is working. The business reality is just "No."
                     log.warn("Account resolution failed for referenceId={}: {}", event.referenceId(), e.getMessage());
                     validationFailures.add(strategy.createRejectedRequest(event));
                     dlqPublisher.publishBusinessViolationMessageToDlq(recordContext);
-                } catch (Exception e) {
-                    // If it's a completely unexpected system error, THEN it goes to the DLQ
-                    log.error("Unexpected error mapping request", e);
+                } catch (IllegalArgumentException | ClassCastException e) {
+                    // TERMINAL ERROR: The data inside the payload is logically impossible to map.
+                    log.error("Terminal mapping error for referenceId={}", event.referenceId(), e);
                     dlqPublisher.publishMalformedToDlq(recordContext);
+                } catch (Exception e) {
+                    // TRANSIENT ERROR: Database is down, network timeout, connection pool exhausted.
+                    log.error("Transient infrastructure error mapping request {}. Throwing to trigger Kafka retry.", event.referenceId(), e);
+                    throw new RuntimeException("Transient infrastructure failure during mapping", e);
                 }
             });
 

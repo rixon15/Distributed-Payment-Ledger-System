@@ -204,7 +204,18 @@ class PaymentResilienceIntegrationTest extends AbstractIntegrationTest {
         mockMvc.perform(post("/payments/execute")
                 .header("X-User-ID", UUID.randomUUID())
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(malformedJson)));
+                .content(malformedJson));
+
+        assertPaymentCountAll(0);
+        assertOutboxCount(0);
+    }
+
+    @Test
+    void missingXUserIDHeader_returns4xx_andNoMutation() throws Exception {
+        mockMvc.perform(post("/payments/execute")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(transferRequest("missing-header-key"))))
+                .andExpect(status().isBadRequest());
 
         assertPaymentCountAll(0);
         assertOutboxCount(0);
@@ -213,9 +224,10 @@ class PaymentResilienceIntegrationTest extends AbstractIntegrationTest {
     @Test
     void invalidXUserIDFormat_returns4xx_andNoMutation() throws Exception {
         mockMvc.perform(post("/payments/execute")
+                        .header("X-User-ID", "this-is-not-a-valid-uuid")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(transferRequest("invalid"))))
-                .andExpect(status().is4xxClientError());
+                        .content(objectMapper.writeValueAsString(transferRequest("invalid-format-key"))))
+                .andExpect(status().isBadRequest());
 
         assertPaymentCountAll(0);
         assertOutboxCount(0);

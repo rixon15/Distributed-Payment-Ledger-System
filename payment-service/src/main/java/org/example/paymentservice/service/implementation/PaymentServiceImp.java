@@ -7,8 +7,6 @@ import org.example.paymentservice.core.exception.DuplicatedRequestException;
 import org.example.paymentservice.core.exception.InvalidTransferException;
 import org.example.paymentservice.core.exception.PaymentNotFoundException;
 import org.example.paymentservice.dto.PaymentRequest;
-import org.example.paymentservice.dto.event.TransactionInitiatedEvent;
-import org.example.paymentservice.dto.event.TransactionPayload;
 import org.example.paymentservice.dto.event.TransactionStatus;
 import org.example.paymentservice.model.*;
 import org.example.paymentservice.repository.OutboxRepository;
@@ -21,7 +19,6 @@ import org.example.paymentservice.simulator.riskengine.dto.RiskRequest;
 import org.example.paymentservice.simulator.riskengine.dto.RiskResponse;
 import org.example.paymentservice.simulator.riskengine.dto.RiskStatus;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.serializer.support.SerializationFailedException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -32,7 +29,6 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.util.*;
 
 /**
@@ -252,7 +248,7 @@ public class PaymentServiceImp implements PaymentService {
             payment.setErrorMessage("Risk rejected: " + reason);
             paymentRepository.save(payment);
 
-            outboxService.saveOutboxEvent(payment, TransactionStatus.FAILED, "High risk of fraud detected");
+            outboxService.saveOutboxEvent(payment, TransactionStatus.FAILED, payment.getErrorMessage());
         });
 
         requestLockService.release(payment.getIdempotencyKey());
@@ -280,41 +276,4 @@ public class PaymentServiceImp implements PaymentService {
         );
     }
 
-    private void saveOutboxEvent(Payment payment, TransactionStatus status, String userMessage) {
-        // Create Payload
-        TransactionPayload payloadData = new TransactionPayload(
-                payment.getUserId(),
-                payment.getReceiverId(),
-                payment.getAmount(),
-                payment.getCurrency().toString(),
-                status,
-                userMessage,
-                payment.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant(),
-                null
-        );
-
-        TransactionInitiatedEvent eventPayload = new TransactionInitiatedEvent(
-                UUID.randomUUID(),
-                payment.getType(),
-                payment.getId(),
-                Instant.now(),
-                payloadData
-        );
-
-        try {
-            String jsonPayload = objectMapper.writeValueAsString(eventPayload);
-
-            OutboxEvent outbox = OutboxEvent.builder()
-                    .aggregateId(payment.getUserId().toString())
-                    .eventType(payment.getType())
-                    .payload(jsonPayload)
-                    .createdAt(Instant.now())
-                    .build();
-
-            outboxRepository.save(outbox);
-        } catch (Exception e) {
-            log.error("Failed to queue outbox event for payment {}", payment.getId(), e);
-            throw new SerializationFailedException("Failed to serialize event", e);
-        }
-    }
 }

@@ -51,17 +51,13 @@ public class WithdrawStrategy extends PaymentStrategy {
 
     private void callBankApi(Payment payment) {
 
-        BankPaymentResponse existingStatus = null;
-
         try {
-            existingStatus = checkExternalStatus(payment.getId().toString());
+            BankPaymentResponse existingStatus = checkExternalStatus(payment.getId().toString());
 
             reconcileWithBank(payment, existingStatus, bankUrl);
         } catch (Exception e) {
             log.error("Reconciliation inquiry failed for payment {}. Retrying later.", payment.getId(), e);
         }
-
-        reconcileWithBank(payment, existingStatus, bankUrl);
     }
 
     /**
