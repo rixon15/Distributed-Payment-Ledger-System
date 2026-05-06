@@ -1,11 +1,15 @@
 package com.openfashion.ledgerservice.listener;
 
+import com.openfashion.ledgerservice.core.exceptions.AccountInactiveException;
+import com.openfashion.ledgerservice.core.exceptions.AccountNotFoundException;
 import com.openfashion.ledgerservice.core.exceptions.DbTimeoutException;
-import com.openfashion.ledgerservice.core.exceptions.UnsupportedTransactionException;
+import com.openfashion.ledgerservice.core.exceptions.MissingSystemAccountException;
 import com.openfashion.ledgerservice.dto.TransactionRequest;
 import com.openfashion.ledgerservice.dto.consumer.BatchToken;
 import com.openfashion.ledgerservice.dto.event.TransactionInitiatedEvent;
+import com.openfashion.ledgerservice.model.TransactionStatus;
 import com.openfashion.ledgerservice.model.TransactionType;
+import com.openfashion.ledgerservice.service.DlqPublisher;
 import com.openfashion.ledgerservice.service.LedgerBatchService;
 import com.openfashion.ledgerservice.service.RedisService;
 import com.openfashion.ledgerservice.service.strategy.LedgerStrategy;
@@ -16,10 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
-import java.util.EnumMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 
 /**
  * Kafka ingestion entrypoint for ledger processing.
@@ -47,6 +48,7 @@ public class TransactionEventListener {
     private final List<LedgerStrategy> strategyList;
     private final Map<TransactionType, LedgerStrategy> strategyMap = new EnumMap<>(TransactionType.class);
     private final LedgerBatchService ledgerBatchService;
+    private final DlqPublisher dlqPublisher;
 
     /**
      * Initializes strategy mapping and starts asynchronous Kafka consumption.
@@ -89,39 +91,69 @@ public class TransactionEventListener {
         parallelConsumer.subscribe(List.of("transaction.request"));
 
         parallelConsumer.poll(context -> {
-            // In version 0.5.x, .stream() provides the records in the batch
-            // when .batchSize() is set in the options.
-            List<TransactionRequest> batch = context.stream()
-                    .map(recordContext -> {
-                        // Access the value directly from the RecordContext
-                        TransactionInitiatedEvent event = recordContext.value();
 
-                        LedgerStrategy strategy = strategyMap.get(event.eventType());
+            List<TransactionRequest> validRequests = new ArrayList<>();
+            List<TransactionRequest> validationFailures = new ArrayList<>();
 
-                        if (strategy == null) {
-                            throw new UnsupportedTransactionException(event.eventType());
-                        }
+            context.stream().forEach(recordContext -> {
+                TransactionInitiatedEvent event = recordContext.value();
 
-                        return strategy.mapToRequest(event);
+                if (event == null || event.referenceId() == null || event.payload() == null) {
+                    log.error("Terminal Error: Malformed event received (null event, referenceId, or payload). Sending to DLQ.");
+                    dlqPublisher.publishMalformedToDlq(recordContext);
+                    return;
+                }
 
-                    })
-                    .filter(Objects::nonNull)
-                    .toList();
+                LedgerStrategy strategy = strategyMap.get(event.eventType());
 
-            if (batch.isEmpty()) return;
+                if (strategy == null) {
+                    dlqPublisher.publishUnsupportedTypeToDlq(recordContext, String.valueOf(event.eventType()));
+                    return;
+                }
 
-            log.info("Processing Kafka batch of size: {}", batch.size());
+                if (!strategy.isValidTransaction(event)) {
+                    log.warn("Business validation failed for referenceId={}", event.referenceId());
+                    validationFailures.add(strategy.createRejectedRequest(event));
+                    dlqPublisher.publishBusinessViolationMessageToDlq(recordContext);
+                    return;
+                }
+
+                try {
+                    validRequests.add(strategy.mapToRequest(event));
+                } catch (AccountNotFoundException | MissingSystemAccountException | AccountInactiveException e) {
+                    // BUSINESS REJECTION: The system is working. The business reality is just "No."
+                    log.warn("Account resolution failed for referenceId={}: {}", event.referenceId(), e.getMessage());
+                    validationFailures.add(strategy.createRejectedRequest(event));
+                    dlqPublisher.publishBusinessViolationMessageToDlq(recordContext);
+                } catch (IllegalArgumentException | ClassCastException e) {
+                    // TERMINAL ERROR: The data inside the payload is logically impossible to map.
+                    log.error("Terminal mapping error for referenceId={}", event.referenceId(), e);
+                    dlqPublisher.publishMalformedToDlq(recordContext);
+                } catch (Exception e) {
+                    // TRANSIENT ERROR: Database is down, network timeout, connection pool exhausted.
+                    log.error("Transient infrastructure error mapping request {}. Throwing to trigger Kafka retry.", event.referenceId(), e);
+                    throw new RuntimeException("Transient infrastructure failure during mapping", e);
+                }
+            });
+
+            if (!validationFailures.isEmpty()) {
+                ledgerBatchService.persistRejected(validationFailures, TransactionStatus.REJECTED_VALIDATION);
+            }
+
+            if (validRequests.isEmpty()) return;
+
+            log.info("Processing valid Kafka batch of size: {}", validRequests.size());
 
             BatchToken token = redisService.createBatchToken();
 
-            Map<String, List<TransactionRequest>> results = redisService.processBatchAtomic(batch, token.batchId());
+            Map<String, List<TransactionRequest>> results = redisService.processBatchAtomic(validRequests, token.batchId());
 
             int okCount = results.getOrDefault("ok", List.of()).size();
 
             redisService.setBatchExpectedCount(token.batchId(), okCount);
 
 
-            ledgerBatchService.persistRejectedNsf(results.get("nsf"));
+            ledgerBatchService.persistRejected(results.get("nsf"), TransactionStatus.REJECTED_NSF);
 
 
             boolean success = true;

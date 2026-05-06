@@ -1,6 +1,7 @@
 package com.openfashion.ledgerservice.service;
 
 import com.openfashion.ledgerservice.dto.TransactionRequest;
+import com.openfashion.ledgerservice.model.TransactionStatus;
 
 import java.util.List;
 
@@ -20,9 +21,19 @@ public interface LedgerBatchService {
     void saveTransactions(List<TransactionRequest> batch);
 
     /**
-     * Persists insufficient-funds rejections generated during Redis pre-validation.
-     *
-     * @param nsfList requests rejected as NSF
+     * Persists rejected ledger requests as failed transactions with respective status reasons.
+     * <p>Unlike accepted transactions, rejected requests do not create postings or mutate
+     * account balances. Instead, a single {@code Transaction} record stores the rejection reason
+     * and a corresponding {@code OutboxEvent} is emitted for response publication.
+     * <p>Common rejection reasons are:
+     * <ul>
+     *     <li>{@code REJECTED_NSF} – insufficient funds (caught by Redis Lua script)</li>
+     *     <li>{@code REJECTED_VALIDATION} – business rule violation (caught by listener strategy validation)</li>
+     * </ul>
+     * <p>Idempotent: duplicate rejection requests (same reference ID + transaction type) are
+     * skipped to prevent duplicate outbox records.
+     * @param rejectedList list of transaction requests that were rejected
+     * @param reason the {@code TransactionStatus} enum value indicating rejection cause
      */
-    void persistRejectedNsf(List<TransactionRequest> nsfList);
+    void persistRejected(List<TransactionRequest> rejectedList, TransactionStatus reason);
 }

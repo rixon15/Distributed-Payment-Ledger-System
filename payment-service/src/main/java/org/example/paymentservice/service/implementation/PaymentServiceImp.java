@@ -7,9 +7,11 @@ import org.example.paymentservice.core.exception.DuplicatedRequestException;
 import org.example.paymentservice.core.exception.InvalidTransferException;
 import org.example.paymentservice.core.exception.PaymentNotFoundException;
 import org.example.paymentservice.dto.PaymentRequest;
+import org.example.paymentservice.dto.event.TransactionStatus;
 import org.example.paymentservice.model.*;
 import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
+import org.example.paymentservice.service.OutboxService;
 import org.example.paymentservice.service.PaymentService;
 import org.example.paymentservice.service.RequestLockService;
 import org.example.paymentservice.service.strategy.PaymentStrategy;
@@ -52,7 +54,7 @@ public class PaymentServiceImp implements PaymentService {
     private final OutboxRepository outboxRepository;
     private final ObjectMapper objectMapper;
     private final RequestLockService requestLockService;
-
+    private final OutboxService outboxService;
 
     private final Map<PaymentType, PaymentStrategy> strategyMap = new EnumMap<>(PaymentType.class);
 
@@ -245,6 +247,8 @@ public class PaymentServiceImp implements PaymentService {
             payment.setStatus(PaymentStatus.FAILED);
             payment.setErrorMessage("Risk rejected: " + reason);
             paymentRepository.save(payment);
+
+            outboxService.saveOutboxEvent(payment, TransactionStatus.FAILED, payment.getErrorMessage());
         });
 
         requestLockService.release(payment.getIdempotencyKey());
@@ -271,4 +275,5 @@ public class PaymentServiceImp implements PaymentService {
                         .build()
         );
     }
+
 }

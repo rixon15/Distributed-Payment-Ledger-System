@@ -5,8 +5,8 @@ import org.example.paymentservice.dto.PaymentRequest;
 import org.example.paymentservice.model.Payment;
 import org.example.paymentservice.model.PaymentStatus;
 import org.example.paymentservice.model.PaymentType;
-import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
+import org.example.paymentservice.service.OutboxService;
 import org.example.paymentservice.simulator.bank.dto.BankPaymentRequest;
 import org.example.paymentservice.simulator.bank.dto.BankPaymentResponse;
 import org.example.paymentservice.simulator.bank.dto.BankPaymentStatus;
@@ -29,11 +29,11 @@ public class DepositStrategy extends PaymentStrategy {
 
     private final String bankUrl;
 
-    public DepositStrategy(PaymentRepository paymentRepository, OutboxRepository outboxRepository,
+    public DepositStrategy(PaymentRepository paymentRepository,
                            ObjectMapper objectMapper, TransactionTemplate tx,
                            RestClient restClient,
-                           @Value("${app.bank.url}") String bankUrl) {
-        super(paymentRepository, outboxRepository, objectMapper, tx, restClient);
+                           @Value("${app.bank.url}") String bankUrl, OutboxService outboxService) {
+        super(paymentRepository, objectMapper, tx, restClient, outboxService);
         this.bankUrl = bankUrl;
     }
 
@@ -59,15 +59,24 @@ public class DepositStrategy extends PaymentStrategy {
                 request.amount(),
                 request.currency()
         );
-        BankPaymentResponse response = restClient.post()
-                .uri(bankUrl + "/pay")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(bankRequest)
-                .retrieve()
-                .body(BankPaymentResponse.class);
+        BankPaymentResponse response;
+        try {
+            response = restClient.post()
+                    .uri(bankUrl + "/pay")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(bankRequest)
+                    .retrieve()
+                    .body(BankPaymentResponse.class);
+        } catch (Exception e) {
+            log.error("Bank API call failed for payment {}: {}", payment.getId(), e.getMessage());
+            handleFailure(payment, "Bank Service Unavailable: " + e.getClass().getSimpleName(),
+                    "Failed to reach bank service");
+            return;
+        }
 
         if (response == null) {
-            throw new IllegalStateException("Failed to call the bank api");
+            handleFailure(payment, "Bank API returned null response", "Failed to reach bank service");
+            return;
         }
 
         if (response.status().equals(BankPaymentStatus.APPROVED)) {

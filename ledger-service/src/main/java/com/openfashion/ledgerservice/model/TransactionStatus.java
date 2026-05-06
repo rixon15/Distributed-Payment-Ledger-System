@@ -14,6 +14,7 @@ public enum TransactionStatus {
     REJECTED_RISK,
     /** Rejected because one of the accounts is not active. */
     REJECTED_INACTIVE,
+    REJECTED_VALIDATION,
     /** Failed due to processing or integration error. */
     FAILED,
     /** Neutralized / voided after prior creation. */

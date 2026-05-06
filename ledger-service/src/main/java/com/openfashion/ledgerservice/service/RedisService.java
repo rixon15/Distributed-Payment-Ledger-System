@@ -21,31 +21,47 @@ import java.util.UUID;
 public interface RedisService {
 
     /**
-     * Atomically validates and stages a batch using Redis Lua scripts.
+     * Atomically validates and stages a batch using Redis Lua.
      *
-     * @param batch normalized ledger requests
-     * @param batchId correlation id for batch completion tracking
-     * @return partitioned lists keyed by "ok" and "nsf"
+     * <p>For each request:
+     * <ul>
+     *   <li>deduplicates by composite idempotency key,</li>
+     *   <li>optionally performs soft-balance NSF checks,</li>
+     *   <li>writes accepted records to {@code ledger:stream:tx}.</li>
+     * </ul>
+     *
+     * @param batch normalized requests from strategy mapping
+     * @param batchId correlation id for completion tracking
+     * @return map with keys {@code "ok"} and {@code "nsf"}
      */
     Map<String, List<TransactionRequest>> processBatchAtomic(List<TransactionRequest> batch, String batchId);
 
     /**
-     * Reads newly delivered records for this consumer from the transaction stream.
+     * Reads newly delivered stream entries for this consumer and deserializes payloads.
+     *
+     * <p>Malformed entries are moved to DLQ and acknowledged to avoid blocking the stream.
      */
     List<StreamEnvelope<TransactionRequest>> readNewFromStream(int count, Duration block);
 
     /**
-     * Claims stale pending records from the consumer group after minimum idle time.
+     * Claims stale pending entries from the consumer group after a minimum idle threshold.
+     *
+     * <p>Delivery count is preserved in returned envelopes for retry-cutoff logic.
      */
     List<StreamEnvelope<TransactionRequest>> claimStaleFromStream(int count, Duration minIdle);
 
     /**
-     * Acknowledges stream entries that were already persisted in Postgres.
+     * Acknowledges persisted stream entries in the consumer group.
+     *
+     * @return ack summary including partial-ack diagnostics
      */
     AckResult acknowledgePersisted(List<StreamEnvelope<TransactionRequest>> batch);
 
     /**
-     * Moves a failing record to DLQ and acknowledges the original stream entry.
+     * Moves a failed entry to {@code ledger:stream:tx:dlq} and acknowledges the original entry.
+     *
+     * @param failed failing stream envelope
+     * @param reason short machine-readable failure reason
      */
     void moveToDlqAndAck(StreamEnvelope<TransactionRequest> failed, String reason);
 
@@ -55,27 +71,31 @@ public interface RedisService {
     void initializeSnapshotIfMissing(Account account);
 
     /**
-     * Applies confirmed net account balance changes to Redis snapshot/pending delta state.
+     * Applies confirmed net balance deltas to Redis snapshot and pending-delta hashes.
+     *
+     * <p>Called only after DB balance updates are successful.
      */
     void syncRedisBalances(Map<UUID, BigDecimal> netChanges);
 
     /**
-     * Waits until a batch is marked DONE or timeout is reached.
+     * Waits until a batch reaches DONE status or timeout expires.
+     *
+     * <p>Completion is detected via metadata hash status and done-stream events.
      */
     boolean awaitBatchCompletion(String batchId, Duration timeout);
 
     /**
-     * Increments persisted+acked progress for a batch.
+     * Marks persisted progress for a batch and emits a DONE signal when processed >= expected.
      */
     void markBatchProgress(String batchId, int ackedCount);
 
     /**
-     * Creates metadata for a new batch tracking session.
+     * Creates and initializes Redis metadata for a new batch tracking lifecycle.
      */
     BatchToken createBatchToken();
 
     /**
-     * Sets expected successful count used to transition a batch to DONE.
+     * Sets expected accepted count used to transition batch status to DONE.
      */
     void setBatchExpectedCount(String batchId, int expectedCount);
 

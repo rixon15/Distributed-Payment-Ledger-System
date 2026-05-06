@@ -5,17 +5,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.example.paymentservice.dto.PaymentRequest;
 import org.example.paymentservice.dto.event.*;
 import org.example.paymentservice.model.*;
-import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
+import org.example.paymentservice.service.OutboxService;
 import org.example.paymentservice.simulator.bank.dto.BankPaymentRequest;
 import org.example.paymentservice.simulator.bank.dto.BankPaymentResponse;
-import org.springframework.core.serializer.support.SerializationFailedException;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
-import java.time.Instant;
-import java.time.ZoneId;
 import java.util.UUID;
 
 /**
@@ -30,10 +27,10 @@ import java.util.UUID;
 public abstract class PaymentStrategy {
 
     protected final PaymentRepository paymentRepository;
-    protected final OutboxRepository outboxRepository;
     protected final ObjectMapper objectMapper;
     protected final TransactionTemplate tx;
     protected final RestClient restClient;
+    private final OutboxService outboxService;
 
 
     /**
@@ -47,47 +44,6 @@ public abstract class PaymentStrategy {
     public abstract void execute(Payment payment, PaymentRequest request);
 
     /**
-     * Persists an outbox event containing the ledger transaction payload.
-     */
-    protected void saveOutboxEvent(Payment payment, TransactionStatus status, String userMessage) {
-        // Create Payload
-        TransactionPayload payloadData = new TransactionPayload(
-                payment.getUserId(),
-                payment.getReceiverId(),
-                payment.getAmount(),
-                payment.getCurrency().toString(),
-                status,
-                userMessage,
-                payment.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant(),
-                null
-        );
-
-        TransactionInitiatedEvent eventPayload = new TransactionInitiatedEvent(
-                UUID.randomUUID(),
-                payment.getType(),
-                payment.getId(),
-                Instant.now(),
-                payloadData
-        );
-
-        try {
-            String jsonPayload = objectMapper.writeValueAsString(eventPayload);
-
-            OutboxEvent outbox = OutboxEvent.builder()
-                    .aggregateId(payment.getUserId().toString())
-                    .eventType(payment.getType())
-                    .payload(jsonPayload)
-                    .createdAt(Instant.now())
-                    .build();
-
-            outboxRepository.save(outbox);
-        } catch (Exception e) {
-            log.error("Failed to queue outbox event for payment {}", payment.getId(), e);
-            throw new SerializationFailedException("Failed to serialize event", e);
-        }
-    }
-
-    /**
      * Marks payment failed and emits failure outbox event.
      */
     protected void handleFailure(Payment payment, String internalReason, String userMessage) {
@@ -98,7 +54,7 @@ public abstract class PaymentStrategy {
             payment.setErrorMessage(internalReason);
             paymentRepository.save(payment);
 
-            saveOutboxEvent(payment, TransactionStatus.FAILED, userMessage);
+            outboxService.saveOutboxEvent(payment, TransactionStatus.FAILED, userMessage);
         });
     }
 
@@ -117,7 +73,7 @@ public abstract class PaymentStrategy {
                 default -> TransactionStatus.PENDING;
             };
 
-            saveOutboxEvent(payment, ledgerStatus, null);
+            outboxService.saveOutboxEvent(payment, ledgerStatus, null);
         });
     }
 
@@ -125,7 +81,11 @@ public abstract class PaymentStrategy {
      * Reconciliation helper that transitions payment based on bank status.
      */
     protected void reconcileWithBank(Payment payment, BankPaymentResponse bankResult, String bankUrl, int retryCount) {
-        if (bankResult == null) return;
+        if (bankResult == null) {
+            log.error("Bank reconciliation failed: null response (likely HTTP 5xx or timeout) for payment {}", payment.getId());
+            handleFailure(payment, "Bank Service Unavailable", "Failed to reach bank service");
+            return;
+        }
 
         switch (bankResult.status()) {
             case APPROVED -> {
@@ -175,8 +135,10 @@ public abstract class PaymentStrategy {
 
             // After the POST, we use the same reconciliation logic
             reconcileWithBank(payment, response, bankUrl, retryCount);
-        } catch (Exception _) {
-            log.error("POST /pay failed for payment {}. Recovery scheduler will inquire status later.", payment.getId());
+        } catch (Exception e) {
+            log.error("POST /pay failed for payment {}: {}", payment.getId(), e.getMessage());
+            handleFailure(payment, "Bank API Error: " + e.getClass().getSimpleName(),
+                    "Bank service unreachable or malformed response");
         }
     }
 }
