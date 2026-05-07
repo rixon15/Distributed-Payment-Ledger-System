@@ -47,6 +47,18 @@
 
     <dependencies>
         <dependency>
+            <groupId>au.com.dius.pact.provider</groupId>
+            <artifactId>junit5</artifactId>
+            <version>4.6.15</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>au.com.dius.pact.consumer</groupId>
+            <artifactId>junit5</artifactId>
+            <version>4.6.15</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>io.confluent.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>
             <version>0.5.3.3</version>
