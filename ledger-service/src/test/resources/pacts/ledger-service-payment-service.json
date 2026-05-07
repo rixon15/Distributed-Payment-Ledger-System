@@ -1,0 +1,163 @@
+{
+  "consumer": {
+    "name": "ledger-service"
+  },
+  "interactions": [
+    {
+      "contents": {
+        "content": {
+          "aggregatedId": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+          "eventId": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+          "eventType": "TRANSFER",
+          "payload": {
+            "amount": 50.0,
+            "currency": "USD",
+            "metadata": {
+
+            },
+            "receiverId": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "senderId": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "status": "PENDING",
+            "timestamp": "2026-05-06T12:00:00.000000Z",
+            "userMessage": "Test transaction"
+          },
+          "timestamp": "2026-05-06T12:00:00.000000Z"
+        },
+        "contentType": "application/json",
+        "encoded": false
+      },
+      "description": "a valid Transaction request event",
+      "generators": {
+        "body": {
+          "$.aggregatedId": {
+            "type": "Uuid"
+          },
+          "$.eventId": {
+            "type": "Uuid"
+          },
+          "$.payload.receiverId": {
+            "type": "Uuid"
+          },
+          "$.payload.senderId": {
+            "type": "Uuid"
+          }
+        }
+      },
+      "key": "ae5205eb",
+      "matchingRules": {
+        "body": {
+          "$.aggregatedId": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "regex",
+                "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+              }
+            ]
+          },
+          "$.eventId": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "regex",
+                "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+              }
+            ]
+          },
+          "$.eventType": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "regex",
+                "regex": "^(DEPOSIT|WITHDRAWAL|WITHDRAWAL_RESERVE|WITHDRAWAL_SETTLE|WITHDRAWAL_RELEASE|TRANSFER|PAYMENT|REFUND|FEE|ADJUSTMENT|INTEREST)$"
+              }
+            ]
+          },
+          "$.payload.amount": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "decimal"
+              }
+            ]
+          },
+          "$.payload.currency": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          },
+          "$.payload.receiverId": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "regex",
+                "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+              }
+            ]
+          },
+          "$.payload.senderId": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "regex",
+                "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+              }
+            ]
+          },
+          "$.payload.status": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "regex",
+                "regex": "^(PENDING|POSTED|REJECTED_NSF|REJECTED_RISK|REJECTED_INACTIVE|REJECTED_VALIDATION|FAILED|VOID)$"
+              }
+            ]
+          },
+          "$.payload.timestamp": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          },
+          "$.payload.userMessage": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          },
+          "$.timestamp": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          }
+        }
+      },
+      "metadata": {
+        "contentType": "application/json"
+      },
+      "pending": false,
+      "type": "Asynchronous/Messages"
+    }
+  ],
+  "metadata": {
+    "pact-jvm": {
+      "version": "4.6.15"
+    },
+    "pactSpecification": {
+      "version": "4.0"
+    }
+  },
+  "provider": {
+    "name": "payment-service"
+  }
+}
