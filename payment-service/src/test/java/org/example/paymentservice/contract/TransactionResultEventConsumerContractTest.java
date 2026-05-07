@@ -50,8 +50,7 @@ class TransactionResultEventConsumerContractTest {
     void testTransactionResultEventDeserialization(V4Interaction.AsynchronousMessage message) throws JsonProcessingException {
         byte[] kafkaMessageBytes = message.getContents().getContents().getValue();
 
-        assert kafkaMessageBytes != null;
-        System.out.println("Raw message: " + new String(kafkaMessageBytes));
+        assertThat(kafkaMessageBytes).isNotNull();
 
         String json = new String(kafkaMessageBytes);
 

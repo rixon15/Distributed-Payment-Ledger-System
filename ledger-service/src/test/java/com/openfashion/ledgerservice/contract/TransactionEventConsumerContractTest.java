@@ -66,8 +66,7 @@ class TransactionEventConsumerContractTest {
         // In Pact V4, we extract the bytes from the nested MessageContents object
         byte[] kafkaMessageBytes = message.getContents().getContents().getValue();
 
-        assert kafkaMessageBytes != null;
-        System.out.println("Raw message: " + new String(kafkaMessageBytes));
+        assertThat(kafkaMessageBytes).isNotNull();
 
         TransactionInitiatedEvent event = objectMapper.readValue(kafkaMessageBytes, TransactionInitiatedEvent.class);
 
