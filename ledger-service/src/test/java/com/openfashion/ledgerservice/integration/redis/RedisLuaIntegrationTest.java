@@ -15,7 +15,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
@@ -31,21 +30,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest
 class RedisLuaIntegrationTest extends AbstractIntegrationTest {
 
-    private static final String IDEMPOTENCY_KEY = "ledger:idempotency:set";
-    private static final String DB_SNAPSHOT_KEY = "ledger:db:snapshot";
-    private static final String PENDING_DELTA_KEY = "ledger:pending:delta";
-    private static final String STREAM_KEY = "ledger:stream:tx";
-    private static final String DLQ_STREAM_KEY = "ledger:stream:tx:dlq";
-    private static final String BATCH_DONE_STREAM = "ledger:stream:batch:done";
-
     @Autowired
     private RedisService redisService;
     @Autowired
     private LedgerBatchService ledgerBatchService;
     @Autowired
     private AccountRepository accountRepository;
-    @Autowired
-    private StringRedisTemplate redisTemplate;
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
@@ -60,15 +50,7 @@ class RedisLuaIntegrationTest extends AbstractIntegrationTest {
         jdbcTemplate.execute(
                 "TRUNCATE TABLE postings, outbox_events, transactions, accounts CASCADE"
         );
-        //mommentan commented out, the clean up is not needed at the current time.
-//        redisTemplate.delete(List.of(
-//                IDEMPOTENCY_KEY,
-//                DB_SNAPSHOT_KEY,
-//                PENDING_DELTA_KEY,
-//                STREAM_KEY,
-//                DLQ_STREAM_KEY,
-//                BATCH_DONE_STREAM
-//        ));
+
     }
 
     @PreDestroy
