@@ -19,8 +19,6 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.utility.DockerImageName;
 import tools.jackson.databind.ObjectMapper;
@@ -38,12 +36,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest
 @AutoConfigureMockMvc
-@Testcontainers
 @ActiveProfiles("test")
 @SuppressWarnings("resource")
 class ExternalApiChaosTest {
 
-    /*FIXME: These test are temporary, the will "lose meaning" once the real external APIs are introduced with the ACL layer.
+    /*FIXME: These test are temporary; they will "lose meaning" once the real external APIs are introduced with the ACL layer.
             The ACL will depend on sealed internal result types
     */
 
@@ -59,19 +56,16 @@ class ExternalApiChaosTest {
 
     private static final int REDIS_PORT = 6379;
 
-    @Container
     static final PostgreSQLContainer<?> POSTGRESQL_CONTAINER =
             new PostgreSQLContainer<>("postgres:16-alpine")
                     .withDatabaseName("payment_db")
                     .withUsername("testuser")
                     .withPassword("testpass");
 
-    @Container
     static final GenericContainer<?> REDIS_CONTAINER =
             new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
                     .withExposedPorts(REDIS_PORT);
 
-    @Container
     static final KafkaContainer KAFKA_CONTAINER =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 

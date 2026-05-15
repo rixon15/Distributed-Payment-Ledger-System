@@ -6,7 +6,6 @@ import eu.rekawek.toxiproxy.Proxy;
 import eu.rekawek.toxiproxy.ToxiproxyClient;
 import eu.rekawek.toxiproxy.model.ToxicDirection;
 import org.example.paymentservice.dto.PaymentRequest;
-import org.example.paymentservice.integration.base.AbstractIntegrationTest;
 import org.example.paymentservice.model.OutboxEvent;
 import org.example.paymentservice.model.Payment;
 import org.example.paymentservice.model.PaymentStatus;
@@ -55,7 +54,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @Testcontainers
 @ActiveProfiles("test")
 @SuppressWarnings("resource")
-public class KafkaChaosTest {
+class KafkaChaosTest {
     private static final int KAFKA_PORT = 9092;
     private static final int REDIS_PORT = 6379;
     private static final int TOXIPROXY_KAFKA_PORT = 29092;
@@ -202,7 +201,6 @@ public class KafkaChaosTest {
 
         kafkaProxy.toxics().latency("kafka-latency", ToxicDirection.DOWNSTREAM, 2000);
 
-        long startNanos = System.nanoTime();
 
         mockMvc.perform(post("/payments/execute")
                         .header("X-User-ID", senderId)
@@ -210,7 +208,6 @@ public class KafkaChaosTest {
                         .content(objectMapper.writeValueAsString(withdrawalRequest(key))))
                 .andExpect(status().isAccepted());
 
-        long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;
 
         awaitPaymentCountByIdempotencyKey(key, 1, WAIT_TIMEOUT);
         assertOutboxCountBySenderAndType(senderId, PaymentType.WITHDRAWAL, 1);
@@ -224,8 +221,6 @@ public class KafkaChaosTest {
         assertThat(outbox.getPayload()).contains(payment.getId().toString());
         assertThat(outbox.getPayload()).contains("\"status\": \"PENDING\"");
 
-        // Intentionally loose: prove request still succeeds under Kafka slowness.
-        assertThat(elapsedMs).isGreaterThanOrEqualTo(0);
     }
 
 

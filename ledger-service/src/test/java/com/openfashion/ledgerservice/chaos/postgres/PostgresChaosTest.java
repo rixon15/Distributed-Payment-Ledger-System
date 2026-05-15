@@ -23,8 +23,6 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.ToxiproxyContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.utility.DockerImageName;
 import tools.jackson.databind.ObjectMapper;
@@ -41,7 +39,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
-@Testcontainers
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @SuppressWarnings("resource")
 class PostgresChaosTest {
@@ -61,7 +58,6 @@ class PostgresChaosTest {
 
     static final Network NETWORK = Network.newNetwork();
 
-    @Container
     static final PostgreSQLContainer<?> POSTGRESQL_CONTAINER =
             new PostgreSQLContainer<>("postgres:16-alpine")
                     .withDatabaseName("ledger_db")
@@ -70,20 +66,17 @@ class PostgresChaosTest {
                     .withNetwork(NETWORK)
                     .withNetworkAliases("postgres");
 
-    @Container
     static final GenericContainer<?> REDIS_CONTAINER =
             new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
                     .withExposedPorts(REDIS_PORT)
                     .withNetwork(NETWORK)
                     .withNetworkAliases("redis");
 
-    @Container
     static final KafkaContainer KAFKA_CONTAINER =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"))
                     .withNetwork(NETWORK)
                     .withNetworkAliases("kafka");
 
-    @Container
     static final ToxiproxyContainer TOXIPROXY =
             new ToxiproxyContainer(DockerImageName.parse("ghcr.io/shopify/toxiproxy:2.11.0"))
                     .withNetwork(NETWORK)
@@ -297,7 +290,7 @@ class PostgresChaosTest {
         );
 
         postgresProxy.toxics().latency("postgres-latency", ToxicDirection.DOWNSTREAM, 2000);
-        kafkaTemplate.send(TOPIC, referenceId.toString(), validEvent);
+        kafkaTemplate.send(TOPIC, referenceId.toString(), validEvent).get();
 
         Awaitility.await()
                 .atMost(Duration.ofSeconds(15))

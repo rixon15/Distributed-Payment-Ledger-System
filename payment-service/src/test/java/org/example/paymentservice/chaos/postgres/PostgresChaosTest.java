@@ -19,9 +19,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.CannotCreateTransactionException;
@@ -47,7 +47,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 @SpringBootTest
 @Testcontainers
 @SuppressWarnings("resource")
-@Profile("test")
+@ActiveProfiles("test")
 class PostgresChaosTest {
 
     private static final String TOPIC = "transaction.response";
@@ -229,8 +229,6 @@ class PostgresChaosTest {
                     assertThat(reloadedPayment.getErrorMessage()).isNull();
                     assertThat(outboxCount).isZero();
                     assertThat(reloadedOutboxCount).isEqualTo(1);
-
-                    System.out.println(outboxRepository.findAll().getFirst());
 
                     assertOutboxPayloadStatusBySenderAndType(senderId, PaymentType.WITHDRAWAL, TransactionStatus.POSTED.name(), 1);
                 });
