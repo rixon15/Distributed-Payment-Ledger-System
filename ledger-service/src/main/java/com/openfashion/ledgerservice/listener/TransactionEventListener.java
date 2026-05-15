@@ -15,6 +15,7 @@ import com.openfashion.ledgerservice.service.RedisService;
 import com.openfashion.ledgerservice.service.strategy.LedgerStrategy;
 import io.confluent.parallelconsumer.ParallelStreamProcessor;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -57,6 +58,14 @@ public class TransactionEventListener {
     public void init() {
         initStrategies();
         startConsuming();
+    }
+
+    @PreDestroy()
+    public void stopConsuming() {
+        if(parallelConsumer != null) {
+            log.info("Closing Parallel Consumer for TransactionEventListener");
+            parallelConsumer.close();
+        }
     }
 
     /**

@@ -53,6 +53,9 @@ public class RedisServiceImp implements RedisService {
     private final RedisTemplate<String, String> balanceTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    private volatile boolean initialized = false;
+    private final Object initLock = new Object();
+
     private static final String IDEMPOTENCY_KEY = "ledger:idempotency:set";
     private static final String DB_SNAPSHOT_KEY = "ledger:db:snapshot";
     private static final String PENDING_DELTA_KEY = "ledger:pending:delta";
@@ -161,56 +164,18 @@ public class RedisServiceImp implements RedisService {
      */
     @PostConstruct
     public void init() {
+        initializeConsumerName();
 
         try {
-            consumerName = InetAddress.getLocalHost().getHostName() + "-" + ProcessHandle.current().pid();
-        } catch (UnknownHostException _) {
-            consumerName = "ledger-consumer-" + UUID.randomUUID().toString().substring(0, 8);
-            log.warn("Failed to generate hostname-based consumer name, using fallback: {}", consumerName);
-        }
-
-        log.info("Consumer name initialized: {}", consumerName);
-
-        balanceTemplate.execute((RedisCallback<String>) connection ->
-                connection.scriptingCommands().scriptLoad(LEDGER_SCRIPT.getBytes(StandardCharsets.UTF_8))
-        );
-        balanceTemplate.execute((RedisCallback<String>) connection ->
-                connection.scriptingCommands().scriptLoad(SETTLE_SCRIPT.getBytes(StandardCharsets.UTF_8))
-        );
-        balanceTemplate.execute((RedisCallback<String>) connection ->
-                connection.scriptingCommands().scriptLoad(MARK_PROGRESS_SCRIPT.getBytes(StandardCharsets.UTF_8))
-        );
-        balanceTemplate.execute((RedisCallback<String>) connection ->
-                connection.scriptingCommands().scriptLoad(SET_EXPECTED_SCRIPT.getBytes(StandardCharsets.UTF_8))
-        );
-
-        try {
-            balanceTemplate.execute((RedisCallback<String>) connection -> {
-                connection.streamCommands().xGroupCreate(STREAM_KEY.getBytes(StandardCharsets.UTF_8),
-                        STREAM_GROUP,
-                        ReadOffset.from("0"),
-                        true);
-                return "OK";
-            });
-            log.info("Stream consumer group created: {}", STREAM_GROUP);
+            initializeRedisInfrastructure();
         } catch (Exception e) {
-            String message = e.getMessage();
-
-
-            if (message != null && message.contains("BUSYGROUP")) {
-                log.warn("Unexpected error creating consumer group (will continue if BUSYGROUP): {}", e.getMessage());
-            } else {
-                log.info("Consumer group already exists: {}", STREAM_GROUP);
-            }
+            log.warn("Redis infrastructure is not ready during startup. Service will retry lazily on demand.", e);
         }
-
-
-        log.info("Ledger Lua scripts loaded with SHA");
     }
-
 
     @Override
     public Map<String, List<TransactionRequest>> processBatchAtomic(List<TransactionRequest> batch, String batchId) {
+        ensureInitialized();
 
         List<TransactionRequest> okList = new ArrayList<>();
         List<TransactionRequest> nsfList = new ArrayList<>();
@@ -256,6 +221,8 @@ public class RedisServiceImp implements RedisService {
     }
 
     public void initializeSnapshotIfMissing(Account account) {
+        ensureInitialized();
+
         balanceTemplate.opsForHash().putIfAbsent(
                 DB_SNAPSHOT_KEY,
                 account.getId().toString(),
@@ -265,6 +232,8 @@ public class RedisServiceImp implements RedisService {
 
     @Override
     public List<StreamEnvelope<TransactionRequest>> readNewFromStream(int count, Duration block) {
+        ensureInitialized();
+
         List<StreamEnvelope<TransactionRequest>> envelopes = new ArrayList<>();
 
         try {
@@ -307,6 +276,8 @@ public class RedisServiceImp implements RedisService {
 
     @Override
     public List<StreamEnvelope<TransactionRequest>> claimStaleFromStream(int count, Duration minIdle) {
+        ensureInitialized();
+
         List<StreamEnvelope<TransactionRequest>> envelopes = new ArrayList<>();
 
         PendingMessages pendingMessages = balanceTemplate.opsForStream().pending(
@@ -378,6 +349,8 @@ public class RedisServiceImp implements RedisService {
 
     @Override
     public AckResult acknowledgePersisted(List<StreamEnvelope<TransactionRequest>> batch) {
+        ensureInitialized();
+
         if (batch.isEmpty()) return new AckResult(0, 0, List.of(), true, null);
 
         List<RecordId> recordIds = batch.stream()
@@ -409,6 +382,8 @@ public class RedisServiceImp implements RedisService {
 
     @Override
     public void moveToDlqAndAck(StreamEnvelope<TransactionRequest> failed, String reason) {
+        ensureInitialized();
+
         try {
             balanceTemplate.opsForStream().add(
                     DLQ_STREAM_KEY,
@@ -430,6 +405,7 @@ public class RedisServiceImp implements RedisService {
 
     @Override
     public void markBatchProgress(String batchId, int ackedCount) {
+        ensureInitialized();
 
         if (ackedCount <= 0) {
             return;
@@ -450,6 +426,7 @@ public class RedisServiceImp implements RedisService {
 
     @Override
     public boolean awaitBatchCompletion(String batchId, Duration timeout) {
+        ensureInitialized();
 
         String metaKey = batchMetaKey(batchId);
         long deadlineNanos = System.nanoTime() + timeout.toNanos();
@@ -497,6 +474,8 @@ public class RedisServiceImp implements RedisService {
 
     @Override
     public BatchToken createBatchToken() {
+        ensureInitialized();
+
         String batchId = UUID.randomUUID().toString();
         String key = batchMetaKey(batchId);
 
@@ -513,6 +492,7 @@ public class RedisServiceImp implements RedisService {
 
     @Override
     public void setBatchExpectedCount(String batchId, int expectedCount) {
+        ensureInitialized();
 
         if (expectedCount < 0) {
             throw new IllegalArgumentException("expectedCount must be >= 0");
@@ -532,6 +512,8 @@ public class RedisServiceImp implements RedisService {
 
     @Override
     public void syncRedisBalances(Map<UUID, BigDecimal> netChanges) {
+        ensureInitialized();
+
         if (netChanges.isEmpty()) return;
 
         balanceTemplate.executePipelined(new SessionCallback<>() {
@@ -603,5 +585,92 @@ public class RedisServiceImp implements RedisService {
         } catch (Exception e) {
             throw new SerializationFailedException("Serialization failed", e);
         }
+    }
+
+    private void initializeConsumerName() {
+        if (consumerName != null) {
+            return;
+        }
+
+        try {
+            consumerName = InetAddress.getLocalHost().getHostName() + "-" + ProcessHandle.current().pid();
+        } catch (UnknownHostException _) {
+            consumerName = "ledger-consumer-" + UUID.randomUUID().toString().substring(0, 8);
+            log.warn("Failed to generate hostname-based consumer name, using fallback: {}", consumerName);
+        }
+
+        log.info("Consumer name initialized: {}", consumerName);
+    }
+
+    private void ensureInitialized() {
+        if (initialized) {
+            return;
+        }
+
+        initializeRedisInfrastructure();
+
+        if (!initialized) {
+            throw new RedisException("Redis infrastructure is not initialized");
+        }
+    }
+
+    private void initializeRedisInfrastructure() {
+        if (initialized) {
+            return;
+        }
+
+        synchronized (initLock) {
+            if (initialized) {
+                return;
+            }
+
+            initializeConsumerName();
+
+            balanceTemplate.execute((RedisCallback<String>) connection ->
+                    connection.scriptingCommands().scriptLoad(LEDGER_SCRIPT.getBytes(StandardCharsets.UTF_8))
+            );
+            balanceTemplate.execute((RedisCallback<String>) connection ->
+                    connection.scriptingCommands().scriptLoad(SETTLE_SCRIPT.getBytes(StandardCharsets.UTF_8))
+            );
+            balanceTemplate.execute((RedisCallback<String>) connection ->
+                    connection.scriptingCommands().scriptLoad(MARK_PROGRESS_SCRIPT.getBytes(StandardCharsets.UTF_8))
+            );
+            balanceTemplate.execute((RedisCallback<String>) connection ->
+                    connection.scriptingCommands().scriptLoad(SET_EXPECTED_SCRIPT.getBytes(StandardCharsets.UTF_8))
+            );
+
+            try {
+                balanceTemplate.execute((RedisCallback<String>) connection -> {
+                    connection.streamCommands().xGroupCreate(
+                            STREAM_KEY.getBytes(StandardCharsets.UTF_8),
+                            STREAM_GROUP,
+                            ReadOffset.from("0"),
+                            true
+                    );
+                    return "OK";
+                });
+                log.info("Stream consumer group created: {}", STREAM_GROUP);
+            } catch (Exception e) {
+                if (isBusyGroup(e)) {
+                    log.info("Consumer group already exists: {}", STREAM_GROUP);
+                } else {
+                    throw e;
+                }
+            }
+
+            initialized = true;
+            log.info("Redis infrastructure initialized successfully");
+        }
+    }
+
+    private boolean isBusyGroup(Throwable t) {
+        while (t != null) {
+            String message = t.getMessage();
+            if (message != null && message.contains("BUSYGROUP")) {
+                return true;
+            }
+            t = t.getCause();
+        }
+        return false;
     }
 }
