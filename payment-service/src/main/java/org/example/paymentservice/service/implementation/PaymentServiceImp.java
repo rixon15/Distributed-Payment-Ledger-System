@@ -153,6 +153,7 @@ public class PaymentServiceImp implements PaymentService {
             strategy.execute(payment, request);
         } catch (Exception e) {
             log.error("Payment processing business logic failed for key: {}. Releasing Redis lock", request.idempotencyKey(), e);
+            requestLockService.release(request.idempotencyKey());
             throw e;
         }
 

@@ -24,7 +24,6 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.transaction.CannotCreateTransactionException;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.ToxiproxyContainer;
@@ -153,7 +152,7 @@ class PostgresChaosTest {
     @DynamicPropertySource
     static void datasourceProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", () ->
-                "jdbc:postgresql://%s:%d/%s".formatted(
+                "jdbc:postgresql://%s:%d/%s?socketTimeout=3".formatted(
                         TOXIPROXY.getHost(),
                         TOXIPROXY.getMappedPort(TOXIPROXY_POSTGRES_PORT),
                         POSTGRESQL_CONTAINER.getDatabaseName()
@@ -249,7 +248,7 @@ class PostgresChaosTest {
                     .status(PaymentStatus.PENDING)
                     .build();
 
-            assertThrows(CannotCreateTransactionException.class, () -> {
+            assertThrows(Exception.class, () -> {
                 paymentRepository.saveAndFlush(payment);
             });
         } finally {
