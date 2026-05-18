@@ -157,7 +157,7 @@ class WithdrawStrategyUnitTest {
 
     private void stubTxAndPaymentSave() {
         doAnswer(invocation -> {
-            Consumer<TransactionStatus> callback = invocation.getArgument(0);
+            Consumer<org.springframework.transaction.TransactionStatus> callback = invocation.getArgument(0);
             callback.accept(null);
             return null;
         }).when(tx).executeWithoutResult(any());

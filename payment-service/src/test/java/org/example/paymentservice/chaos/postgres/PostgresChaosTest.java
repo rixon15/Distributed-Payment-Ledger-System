@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
@@ -248,7 +249,7 @@ class PostgresChaosTest {
                     .status(PaymentStatus.PENDING)
                     .build();
 
-            assertThrows(Exception.class, () -> {
+            assertThrows(DataAccessException.class, () -> {
                 paymentRepository.saveAndFlush(payment);
             });
         } finally {
