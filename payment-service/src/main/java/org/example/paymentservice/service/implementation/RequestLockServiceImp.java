@@ -28,6 +28,10 @@ public class RequestLockServiceImp implements RequestLockService {
 
     private final String ownerId = UUID.randomUUID().toString();
 
+    private static final DefaultRedisScript<Long> SCRIPT = new DefaultRedisScript<>("if redis.call('get', KEYS[1]) == ARGV[1] then " +
+            "return redis.call('del', KEYS[1]) " +
+            "else return 0 end", Long.class);
+
     /**
      * Initializes lock TTL from configuration.
      */
@@ -53,11 +57,6 @@ public class RequestLockServiceImp implements RequestLockService {
     @Override
     public void release(String key) {
 
-        String script = "if redis.call('get', KEYS[1]) == ARGV[1] then " +
-                "return redis.call('del', KEYS[1]) " +
-                "else return 0 end";
-
-        redisTemplate.execute(new DefaultRedisScript<>(script, Long.class),
-                Collections.singletonList(key), ownerId);
+        redisTemplate.execute(SCRIPT, Collections.singletonList(key), ownerId);
     }
 }
