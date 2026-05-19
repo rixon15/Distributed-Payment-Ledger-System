@@ -2,15 +2,25 @@ name: Microservices CI Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
+      - feature/**
+      - bugfix/**
+      - hotfix/**
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   build-and-test:
     name: Build, Test, and Verify Contracts
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout Code
@@ -29,44 +39,57 @@ jobs:
       # ---------------------------------------------------------
       - name: 1. Run Consumer Tests (Generate Pacts)
         run: |
-          # The Ledger is the Consumer of the Payment Service's TransactionEvent
+          set -euo pipefail
+
           cd ledger-service
-          mvn clean test -Dtest=*ConsumerContractTest
-          
-          # The Payment Service is the Consumer of the Ledger's TransactionResultEvent
+          chmod +x mvnw
+          ./mvnw clean test -Dtest='*ConsumerContractTest'
+
           cd ../payment-service
-          mvn clean test -Dtest=*ConsumerContractTest
+          chmod +x mvnw
+          ./mvnw clean test -Dtest='*ConsumerContractTest'
 
       # ---------------------------------------------------------
       # PHASE 2: PROVIDERS VERIFY THE NEWLY GENERATED CONTRACTS
       # ---------------------------------------------------------
       - name: 2. Run Provider Tests (Verify Pacts)
         run: |
+          set -euo pipefail
+
           cd payment-service
-          mvn test -Dtest=*ProviderContractTest
-          
+          chmod +x mvnw
+          ./mvnw test -Dtest='*ProviderContractTest'
+
           cd ../ledger-service
-          mvn test -Dtest=*ProviderContractTest
+          chmod +x mvnw
+          ./mvnw test -Dtest='*ProviderContractTest'
 
       # ---------------------------------------------------------
       # PHASE 3: RUN THE REST OF THE SUITE & CHECK COVERAGE
       # ---------------------------------------------------------
-      # This phase spins up Testcontainers (Docker is native on this runner)
-      # and runs unit, integration, and chaos tests.
-      # Finally, it runs jacoco:check to enforce the 80% rule.
+      # Instead of relying on a negated Surefire pattern, we run verify
+      # and exclude contract tests through Surefire system properties.
       - name: 3. Run Full Suite & JaCoCo Coverage (Payment Service)
         run: |
+          set -euo pipefail
+
           cd payment-service
-          mvn verify -Dtest=!*ContractTest
+          chmod +x mvnw
+          ./mvnw verify \
+            -DexcludeTests='**/*ConsumerContractTest.java,**/*ProviderContractTest.java'
 
       - name: 4. Run Full Suite & JaCoCo Coverage (Ledger Service)
         run: |
+          set -euo pipefail
+
           cd ledger-service
-          mvn verify -Dtest=!*ContractTest
+          chmod +x mvnw
+          ./mvnw verify \
+            -DexcludeTests='**/*ConsumerContractTest.java,**/*ProviderContractTest.java'
 
       - name: Upload JaCoCo Reports
         uses: actions/upload-artifact@v4
-        if: always() # Uploads even if the build fails
+        if: always()
         with:
           name: jacoco-coverage-reports
           path: |
