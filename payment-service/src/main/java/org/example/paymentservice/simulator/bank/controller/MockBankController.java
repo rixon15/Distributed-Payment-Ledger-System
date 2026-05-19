@@ -30,6 +30,12 @@ public class MockBankController {
                 "SUCCESS"
         );
 
+//        BankPaymentResponse response = new BankPaymentResponse(
+//                UUID.randomUUID(),
+//                BankPaymentStatus.DECLINED,
+//                "DECLINE"
+//        );
+
         idempotencyStore.put(request.referenceId(), response);
 
         return response;

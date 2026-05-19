@@ -5,7 +5,6 @@ import org.example.paymentservice.dto.PaymentRequest;
 import org.example.paymentservice.model.Payment;
 import org.example.paymentservice.model.PaymentStatus;
 import org.example.paymentservice.model.PaymentType;
-import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
 import org.example.paymentservice.service.OutboxService;
 import org.springframework.stereotype.Component;
@@ -23,9 +22,9 @@ import tools.jackson.databind.ObjectMapper;
 public class InternalTransferStrategy extends PaymentStrategy {
 
 
-    public InternalTransferStrategy(PaymentRepository paymentRepository, OutboxRepository outboxRepository,
+    public InternalTransferStrategy(PaymentRepository paymentRepository,
                                     ObjectMapper objectMapper, TransactionTemplate tx, RestClient restClient, OutboxService outboxService) {
-        super(paymentRepository, outboxRepository, objectMapper, tx, restClient, outboxService);
+        super(paymentRepository, objectMapper, tx, restClient, outboxService);
     }
 
     /**

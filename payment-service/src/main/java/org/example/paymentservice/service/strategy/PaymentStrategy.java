@@ -5,18 +5,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.example.paymentservice.dto.PaymentRequest;
 import org.example.paymentservice.dto.event.*;
 import org.example.paymentservice.model.*;
-import org.example.paymentservice.repository.OutboxRepository;
 import org.example.paymentservice.repository.PaymentRepository;
 import org.example.paymentservice.service.OutboxService;
 import org.example.paymentservice.simulator.bank.dto.BankPaymentRequest;
 import org.example.paymentservice.simulator.bank.dto.BankPaymentResponse;
-import org.springframework.core.serializer.support.SerializationFailedException;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
-import java.time.Instant;
-import java.time.ZoneId;
 import java.util.UUID;
 
 /**
@@ -31,7 +27,6 @@ import java.util.UUID;
 public abstract class PaymentStrategy {
 
     protected final PaymentRepository paymentRepository;
-    protected final OutboxRepository outboxRepository;
     protected final ObjectMapper objectMapper;
     protected final TransactionTemplate tx;
     protected final RestClient restClient;
@@ -86,7 +81,11 @@ public abstract class PaymentStrategy {
      * Reconciliation helper that transitions payment based on bank status.
      */
     protected void reconcileWithBank(Payment payment, BankPaymentResponse bankResult, String bankUrl, int retryCount) {
-        if (bankResult == null) return;
+        if (bankResult == null) {
+            log.error("Bank reconciliation failed: null response (likely HTTP 5xx or timeout) for payment {}", payment.getId());
+            handleFailure(payment, "Bank Service Unavailable", "Failed to reach bank service");
+            return;
+        }
 
         switch (bankResult.status()) {
             case APPROVED -> {
@@ -136,8 +135,10 @@ public abstract class PaymentStrategy {
 
             // After the POST, we use the same reconciliation logic
             reconcileWithBank(payment, response, bankUrl, retryCount);
-        } catch (Exception _) {
-            log.error("POST /pay failed for payment {}. Recovery scheduler will inquire status later.", payment.getId());
+        } catch (Exception e) {
+            log.error("POST /pay failed for payment {}: {}", payment.getId(), e.getMessage());
+            handleFailure(payment, "Bank API Error: " + e.getClass().getSimpleName(),
+                    "Bank service unreachable or malformed response");
         }
     }
 }

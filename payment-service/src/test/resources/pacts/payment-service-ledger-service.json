@@ -1,0 +1,101 @@
+{
+  "consumer": {
+    "name": "payment-service"
+  },
+  "interactions": [
+    {
+      "contents": {
+        "content": {
+          "message": "Transaction posted successfully",
+          "reasonCode": "OK",
+          "referenceId": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+          "status": "POSTED",
+          "timestamp": "2026-05-06T12:00:00.000000Z",
+          "type": "WITHDRAWAL_RESERVE"
+        },
+        "contentType": "application/json",
+        "encoded": false
+      },
+      "description": "a valid transaction result event from ledger",
+      "generators": {
+        "body": {
+          "$.referenceId": {
+            "type": "Uuid"
+          }
+        }
+      },
+      "key": "17466782",
+      "matchingRules": {
+        "body": {
+          "$.message": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          },
+          "$.reasonCode": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          },
+          "$.referenceId": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "regex",
+                "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+              }
+            ]
+          },
+          "$.status": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "regex",
+                "regex": "^(PENDING|POSTED|REJECTED_NSF|REJECTED_RISK|REJECTED_INACTIVE|REJECTED_VALIDATION|FAILED)$"
+              }
+            ]
+          },
+          "$.timestamp": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          },
+          "$.type": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "regex",
+                "regex": "^(TRANSFER|DEPOSIT|WITHDRAWAL_RESERVE|WITHDRAWAL_SETTLE|WITHDRAWAL_RELEASE)$"
+              }
+            ]
+          }
+        }
+      },
+      "metadata": {
+        "contentType": "application/json"
+      },
+      "pending": false,
+      "type": "Asynchronous/Messages"
+    }
+  ],
+  "metadata": {
+    "pact-jvm": {
+      "version": "4.6.15"
+    },
+    "pactSpecification": {
+      "version": "4.0"
+    }
+  },
+  "provider": {
+    "name": "ledger-service"
+  }
+}
