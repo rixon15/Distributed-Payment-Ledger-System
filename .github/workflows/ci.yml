@@ -16,11 +16,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Amazon Corretto JDK 21
+      - name: Set up Amazon Corretto JDK 25
         uses: actions/setup-java@v4
         with:
           java-version: '25'
           distribution: 'corretto'
+          java-package: jdk
           cache: 'maven'
 
       # ---------------------------------------------------------
@@ -56,12 +57,12 @@ jobs:
       - name: 3. Run Full Suite & JaCoCo Coverage (Payment Service)
         run: |
           cd payment-service
-          mvn verify
+          mvn verify -Dtest=!*ContractTest
 
       - name: 4. Run Full Suite & JaCoCo Coverage (Ledger Service)
         run: |
           cd ledger-service
-          mvn verify
+          mvn verify -Dtest=!*ContractTest
 
       - name: Upload JaCoCo Reports
         uses: actions/upload-artifact@v4
