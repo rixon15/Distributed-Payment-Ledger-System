@@ -168,6 +168,26 @@ class DPoPTokenBindingTest extends AbstractIntegrationTest {
         assertThat(cnf.get("jkt")).isEqualTo(dPoPKey.computeThumbprint().toString());
     }
 
+    @Test
+    void tokenRequestWithoutDPoPProofIsRejected() throws Exception {
+        String codeVerifier = "test-code-verifier-no-dpop-0123456789-0123456789-abcdef";
+        String code = obtainAuthorizationCode(codeVerifier);
+
+        MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
+        body.add("grant_type", "authorization_code");
+        body.add("code", code);
+        body.add("redirect_uri", REDIRECT_URI);
+        body.add("code_verifier", codeVerifier);
+        body.add("client_id", TEST_CLIENT_ID);
+        body.add("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer");
+        body.add("client_assertion", signedClientAssertion(tokenEndpoint));
+
+        mockMvc.perform(post("/oauth2/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .params(body))
+                .andExpect(status().isBadRequest());
+    }
+
     private String dPoPProof(String htu, String htm, RSAKey dPoPKey) throws Exception {
         JWTClaimsSet claims = new JWTClaimsSet.Builder()
                 .claim("htm", htm)

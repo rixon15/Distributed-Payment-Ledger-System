@@ -11,6 +11,8 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.oauth2.server.authorization.OAuth2AuthorizationServerConfigurer;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.core.OAuth2AccessToken;
+import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.OAuth2ErrorCodes;
 import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames;
@@ -42,6 +44,9 @@ public class AuthorizationServerConfig {
                 .authorizationEndpoint(authorizationEndpoint ->
                         authorizationEndpoint.authorizationRequestConverters(converters ->
                                 converters.addFirst(new RequireParAuthenticationConverter())))
+                .tokenEndpoint(tokenEndpoint ->
+                        tokenEndpoint.accessTokenRequestConverters(converters ->
+                                converters.addFirst(new RequireDPoPAuthenticationConverter())))
                 .pushedAuthorizationRequestEndpoint(Customizer.withDefaults())
                 .authorizationServerMetadataEndpoint(metadataEndpoint -> metadataEndpoint.authorizationServerMetadataCustomizer(
                         metadata -> metadata.claim(REQUIRE_PAR_METADATA, true)
@@ -112,6 +117,27 @@ public class AuthorizationServerConfig {
             }
 
             return this.delegate.convert(request);
+        }
+    }
+
+    static final class RequireDPoPAuthenticationConverter implements AuthenticationConverter {
+
+
+        @Override
+        public @Nullable Authentication convert(HttpServletRequest request) {
+            String dPoPProof = request.getHeader(OAuth2AccessToken.TokenType.DPOP.getValue());
+
+            if(!StringUtils.hasText(dPoPProof)) {
+                OAuth2Error error = new OAuth2Error(
+                        "invalid_dpop_proof",
+                        "A DPoP proof is requred to obtain a sneder-constrained access token.",
+                        "https://datatracker.ietf.org/doc/html/rfc9449"
+                );
+
+                throw new OAuth2AuthenticationException(error);
+            }
+
+            return null;
         }
     }
 
