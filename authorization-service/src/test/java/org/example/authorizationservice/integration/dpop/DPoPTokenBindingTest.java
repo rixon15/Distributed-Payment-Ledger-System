@@ -183,8 +183,70 @@ class DPoPTokenBindingTest extends AbstractIntegrationTest {
         body.add("client_assertion", signedClientAssertion(tokenEndpoint));
 
         mockMvc.perform(post("/oauth2/token")
-                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                .params(body))
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .params(body))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void authorizationCodeRedeemedWithMatchingDPoPJktSucceeds() throws Exception {
+        RSAKey boundDPoPKey = new RSAKeyGenerator(2048)
+                .keyUse(KeyUse.SIGNATURE)
+                .algorithm(JWSAlgorithm.PS256)
+                .keyID(UUID.randomUUID().toString())
+                .generate();
+        String dPoPJkt = boundDPoPKey.computeThumbprint().toString();
+
+        String codeVerifier = "test-code-verifier-jkt-match-0123456789-0123456789-abcdef";
+        String code = obtainAuthorizationCode(codeVerifier, dPoPJkt);
+
+        MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
+        body.add("grant_type", "authorization_code");
+        body.add("code", code);
+        body.add("redirect_uri", REDIRECT_URI);
+        body.add("code_verifier", codeVerifier);
+        body.add("client_id", TEST_CLIENT_ID);
+        body.add("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer");
+        body.add("client_assertion", signedClientAssertion(tokenEndpoint));
+
+        mockMvc.perform(post("/oauth2/token")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .header("DPoP", dPoPProof(tokenEndpoint, "POST", boundDPoPKey))
+                        .params(body))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void authorizationCodeRedeemedWithMismatchedDPoPJktIsRejected() throws Exception {
+        RSAKey boundDPoPKey = new RSAKeyGenerator(2048)
+                .keyUse(KeyUse.SIGNATURE)
+                .algorithm(JWSAlgorithm.PS256)
+                .keyID(UUID.randomUUID().toString())
+                .generate();
+        String dPoPJkt = boundDPoPKey.computeThumbprint().toString();
+
+        RSAKey differentDPoPKey = new RSAKeyGenerator(2048)
+                .keyUse(KeyUse.SIGNATURE)
+                .algorithm(JWSAlgorithm.PS256)
+                .keyID(UUID.randomUUID().toString())
+                .generate();
+
+        String codeVerifier = "test-code-verifier-jkt-mismatch-0123456789-0123456789-abc";
+        String code = obtainAuthorizationCode(codeVerifier, dPoPJkt);
+
+        MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
+        body.add("grant_type", "authorization_code");
+        body.add("code", code);
+        body.add("redirect_uri", REDIRECT_URI);
+        body.add("code_verifier", codeVerifier);
+        body.add("client_id", TEST_CLIENT_ID);
+        body.add("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer");
+        body.add("client_assertion", signedClientAssertion(tokenEndpoint));
+
+        mockMvc.perform(post("/oauth2/token")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .header("DPoP", dPoPProof(tokenEndpoint, "POST", differentDPoPKey))
+                        .params(body))
                 .andExpect(status().isBadRequest());
     }
 
@@ -209,12 +271,19 @@ class DPoPTokenBindingTest extends AbstractIntegrationTest {
     }
 
     private String obtainAuthorizationCode(String codeVerifier) throws Exception {
+        return obtainAuthorizationCode(codeVerifier, null);
+    }
+
+    private String obtainAuthorizationCode(String codeVerifier, String dpopJkt) throws Exception {
         MultiValueMap<String, String> parBody = new LinkedMultiValueMap<>();
         parBody.add("response_type", "code");
         parBody.add("client_id", TEST_CLIENT_ID);
         parBody.add("redirect_uri", REDIRECT_URI);
         parBody.add("code_challenge", codeChallenge(codeVerifier));
         parBody.add("code_challenge_method", "S256");
+        if (dpopJkt != null) {
+            parBody.add("dpop_jkt", dpopJkt);
+        }
         parBody.add("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer");
         parBody.add("client_assertion", signedClientAssertion(parEndpoint));
 

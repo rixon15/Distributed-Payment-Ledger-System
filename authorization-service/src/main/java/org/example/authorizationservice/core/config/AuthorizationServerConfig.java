@@ -1,21 +1,32 @@
 package org.example.authorizationservice.core.config;
 
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.jwk.JWK;
+import com.nimbusds.jwt.SignedJWT;
 import jakarta.servlet.http.HttpServletRequest;
 import org.jspecify.annotations.Nullable;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.MediaType;
+import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.oauth2.server.authorization.OAuth2AuthorizationServerConfigurer;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.OAuth2ErrorCodes;
+import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames;
+import org.springframework.security.oauth2.server.authorization.OAuth2Authorization;
+import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
+import org.springframework.security.oauth2.server.authorization.OAuth2TokenType;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeAuthenticationProvider;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeAuthenticationToken;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeRequestAuthenticationException;
 import org.springframework.security.oauth2.server.authorization.web.authentication.OAuth2AuthorizationCodeRequestAuthenticationConverter;
 import org.springframework.security.oauth2.server.authorization.web.authentication.OAuth2AuthorizationConsentAuthenticationConverter;
@@ -26,6 +37,7 @@ import org.springframework.security.web.authentication.LoginUrlAuthenticationEnt
 import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
 import org.springframework.util.StringUtils;
 
+import java.text.ParseException;
 import java.util.List;
 
 @Configuration
@@ -36,7 +48,8 @@ public class AuthorizationServerConfig {
 
     @Bean
     @Order(1)
-    public SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity http) {
+    public SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity http,
+                                                                      OAuth2AuthorizationService authorizationService) {
         OAuth2AuthorizationServerConfigurer authorizationServerConfigurer = new OAuth2AuthorizationServerConfigurer();
         var endpointsMatcher = authorizationServerConfigurer.getEndpointsMatcher();
 
@@ -46,7 +59,11 @@ public class AuthorizationServerConfig {
                                 converters.addFirst(new RequireParAuthenticationConverter())))
                 .tokenEndpoint(tokenEndpoint ->
                         tokenEndpoint.accessTokenRequestConverters(converters ->
-                                converters.addFirst(new RequireDPoPAuthenticationConverter())))
+                                        converters.addFirst(new RequireDPoPAuthenticationConverter()))
+                                .authenticationProviders(providers -> providers.replaceAll(provider ->
+                                        provider instanceof OAuth2AuthorizationCodeAuthenticationProvider
+                                                ? new DPoPAuthorizationCodeBingindAuthenticationProvider(authorizationService, provider)
+                                                : provider)))
                 .pushedAuthorizationRequestEndpoint(Customizer.withDefaults())
                 .authorizationServerMetadataEndpoint(metadataEndpoint -> metadataEndpoint.authorizationServerMetadataCustomizer(
                         metadata -> metadata.claim(REQUIRE_PAR_METADATA, true)
@@ -127,7 +144,7 @@ public class AuthorizationServerConfig {
         public @Nullable Authentication convert(HttpServletRequest request) {
             String dPoPProof = request.getHeader(OAuth2AccessToken.TokenType.DPOP.getValue());
 
-            if(!StringUtils.hasText(dPoPProof)) {
+            if (!StringUtils.hasText(dPoPProof)) {
                 OAuth2Error error = new OAuth2Error(
                         "invalid_dpop_proof",
                         "A DPoP proof is requred to obtain a sneder-constrained access token.",
@@ -141,4 +158,68 @@ public class AuthorizationServerConfig {
         }
     }
 
+    static final class DPoPAuthorizationCodeBingindAuthenticationProvider implements AuthenticationProvider {
+
+        private static final String DPOP_JKT_PARAMETER_NAME = "dpop_jkt";
+        private static final String DPOP_PROOF_PARAMETER_NAME = "dpop_proof";
+
+        private final OAuth2AuthorizationService authorizationService;
+        private final AuthenticationProvider delegate;
+
+        public DPoPAuthorizationCodeBingindAuthenticationProvider(OAuth2AuthorizationService authorizationService,
+                                                                  AuthenticationProvider delegate) {
+            this.authorizationService = authorizationService;
+            this.delegate = delegate;
+        }
+
+        @Override
+        public @Nullable Authentication authenticate(Authentication authentication) throws AuthenticationException {
+            OAuth2AuthorizationCodeAuthenticationToken authorizationCodeAuthentication =
+                    (OAuth2AuthorizationCodeAuthenticationToken) authentication;
+
+            String dPoPProofCompact = (String) authorizationCodeAuthentication.getAdditionalParameters()
+                    .get(DPOP_PROOF_PARAMETER_NAME);
+
+            if (StringUtils.hasText(dPoPProofCompact)) {
+                OAuth2Authorization authorization = this.authorizationService.findByToken(
+                        authorizationCodeAuthentication.getCode(), new OAuth2TokenType(OAuth2ParameterNames.CODE));
+
+                OAuth2AuthorizationRequest authorizationRequest = authorization != null
+                        ? authorization.getAttribute(OAuth2AuthorizationRequest.class.getName())
+                        : null;
+
+                String boundDPoPJkt = authorizationRequest != null
+                        ? (String) authorizationRequest.getAdditionalParameters().get(DPOP_JKT_PARAMETER_NAME)
+                        : null;
+
+                if (StringUtils.hasText(boundDPoPJkt)
+                        && !boundDPoPJkt.equals(computeDPoPProofJwkThumbprint(dPoPProofCompact))) {
+                    OAuth2Error error = new OAuth2Error(
+                            OAuth2ErrorCodes.INVALID_GRANT,
+                            "The DPoP proof key does not match the dpop_jkt bound to this authorization code.",
+                            "https://datatracker.ietf.org/doc/html/rfx9449#section-10.1"
+                    );
+
+                    throw new OAuth2AuthenticationException(error);
+                }
+            }
+
+            return this.delegate.authenticate(authentication);
+        }
+
+        @Override
+        public boolean supports(Class<?> authentication) {
+            return this.delegate.supports(authentication);
+        }
+
+        private static @Nullable String computeDPoPProofJwkThumbprint(String dPoPProofCompact) {
+            try {
+                JWK jwk = SignedJWT.parse(dPoPProofCompact).getHeader().getJWK();
+
+                return jwk != null ? jwk.computeThumbprint().toString() : null;
+            } catch (ParseException | JOSEException e) {
+                return null;
+            }
+        }
+    }
 }
