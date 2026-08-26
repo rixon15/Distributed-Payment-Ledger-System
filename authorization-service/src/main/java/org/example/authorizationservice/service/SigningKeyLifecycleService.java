@@ -108,7 +108,10 @@ public class SigningKeyLifecycleService {
         if (currentSigningKey != null) {
             currentSigningKey.setStatus(SigningKeyStatus.VERIFY_ONLY);
             currentSigningKey.setRetireAt(OffsetDateTime.now().plus(retirementGracePeriod));
-            signingKeyRepository.save(currentSigningKey);
+            // saveAndFlush, not save: Hibernate's default flush order runs all inserts before all
+            // updates regardless of call order, so a plain save() here would let createSigningKey()'s
+            // INSERT hit the DB before this UPDATE — briefly violating the "only one SIGNING row" constraint.
+            signingKeyRepository.saveAndFlush(currentSigningKey);
         }
 
         createSigningKey();

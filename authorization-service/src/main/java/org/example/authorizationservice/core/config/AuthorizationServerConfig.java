@@ -157,7 +157,7 @@ public class AuthorizationServerConfig {
             if (!StringUtils.hasText(dPoPProof)) {
                 OAuth2Error error = new OAuth2Error(
                         "invalid_dpop_proof",
-                        "A DPoP proof is requred to obtain a sneder-constrained access token.",
+                        "A DPoP proof is required to obtain a sender-constrained access token.",
                         "https://datatracker.ietf.org/doc/html/rfc9449"
                 );
 
@@ -207,7 +207,7 @@ public class AuthorizationServerConfig {
                     OAuth2Error error = new OAuth2Error(
                             OAuth2ErrorCodes.INVALID_GRANT,
                             "The DPoP proof key does not match the dpop_jkt bound to this authorization code.",
-                            "https://datatracker.ietf.org/doc/html/rfx9449#section-10.1"
+                            "https://datatracker.ietf.org/doc/html/rfc9449#section-10.1"
                     );
 
                     throw new OAuth2AuthenticationException(error);

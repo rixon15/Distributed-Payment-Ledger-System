@@ -37,7 +37,7 @@ public class SigningKeyEncryptionService {
 
     private String resolveWrappingKeyId() {
         String cached = wrappingKeyId.get();
-        if (cached != null) return null;
+        if (cached != null) return cached;
 
         String resolved = findOrCreateWrappingKey();
         wrappingKeyId.set(resolved);
