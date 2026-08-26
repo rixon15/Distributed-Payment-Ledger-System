@@ -36,6 +36,24 @@ services:
       timeout: 3s
       retries: 5
 
+  localstack:
+    image: localstack/localstack:4.4.0
+    container_name: auth_localstack
+    ports:
+      - "${LOCALSTACK_HOST_PORT}:4566"
+    environment:
+      SERVICES: kms
+      PERSISTENCE: 1
+    volumes:
+      - localstack_data:/var/lib/localstack
+    networks:
+      - payment-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:4566/_localstack/health" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: payment_zookeeper
@@ -155,6 +173,7 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  localstack_data:
 
 networks:
   payment-network:

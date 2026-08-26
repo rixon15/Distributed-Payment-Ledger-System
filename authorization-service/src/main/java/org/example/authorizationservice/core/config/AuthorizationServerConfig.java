@@ -4,10 +4,12 @@ import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jwt.SignedJWT;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.jspecify.annotations.Nullable;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.config.Customizer;
@@ -28,15 +30,21 @@ import org.springframework.security.oauth2.server.authorization.OAuth2TokenType;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeAuthenticationProvider;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeAuthenticationToken;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeRequestAuthenticationException;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeRequestAuthenticationToken;
+import org.springframework.security.oauth2.server.authorization.context.AuthorizationServerContextHolder;
 import org.springframework.security.oauth2.server.authorization.web.authentication.OAuth2AuthorizationCodeRequestAuthenticationConverter;
 import org.springframework.security.oauth2.server.authorization.web.authentication.OAuth2AuthorizationConsentAuthenticationConverter;
+import org.springframework.security.web.DefaultRedirectStrategy;
+import org.springframework.security.web.RedirectStrategy;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.AuthenticationConverter;
-import org.springframework.security.web.authentication.DelegatingAuthenticationConverter;
-import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
+import org.springframework.security.web.authentication.*;
 import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
 import org.springframework.util.StringUtils;
+import org.springframework.web.util.UriComponentsBuilder;
+import org.springframework.web.util.UriUtils;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.text.ParseException;
 import java.util.List;
 
@@ -56,7 +64,9 @@ public class AuthorizationServerConfig {
         authorizationServerConfigurer
                 .authorizationEndpoint(authorizationEndpoint ->
                         authorizationEndpoint.authorizationRequestConverters(converters ->
-                                converters.addFirst(new RequireParAuthenticationConverter())))
+                                        converters.addFirst(new RequireParAuthenticationConverter()))
+                                .authorizationResponseHandler(new Rfc9207AuthorizationResponseHandler())
+                                .errorResponseHandler(new Rfc9207ErrorResponseHandler()))
                 .tokenEndpoint(tokenEndpoint ->
                         tokenEndpoint.accessTokenRequestConverters(converters ->
                                         converters.addFirst(new RequireDPoPAuthenticationConverter()))
@@ -222,4 +232,82 @@ public class AuthorizationServerConfig {
             }
         }
     }
+
+    private static final String ISS_PARAMETER_NAME = "iss";
+
+    private static RedirectStrategy seeOtherRedirectStrategy() {
+        DefaultRedirectStrategy redirectStrategy = new DefaultRedirectStrategy();
+        redirectStrategy.setStatusCode(HttpStatus.SEE_OTHER);
+        return redirectStrategy;
+    }
+
+    static final class Rfc9207AuthorizationResponseHandler implements AuthenticationSuccessHandler {
+
+        private final RedirectStrategy redirectStrategy = seeOtherRedirectStrategy();
+
+        @Override
+        public void onAuthenticationSuccess(HttpServletRequest request, HttpServletResponse response,
+                                            Authentication authentication) throws IOException {
+            OAuth2AuthorizationCodeRequestAuthenticationToken authorizationCodeRequestAuthentication =
+                    (OAuth2AuthorizationCodeRequestAuthenticationToken) authentication;
+
+            UriComponentsBuilder uriBuilder = UriComponentsBuilder
+                    .fromUriString(authorizationCodeRequestAuthentication.getRedirectUri())
+                    .queryParam(OAuth2ParameterNames.CODE,
+                            authorizationCodeRequestAuthentication.getAuthorizationCode().getTokenValue())
+                    .queryParam(ISS_PARAMETER_NAME, UriUtils.encode(
+                            AuthorizationServerContextHolder.getContext().getIssuer(), StandardCharsets.UTF_8));
+
+            if (StringUtils.hasText(authorizationCodeRequestAuthentication.getState())) {
+                uriBuilder.queryParam(OAuth2ParameterNames.STATE,
+                        UriUtils.encode(authorizationCodeRequestAuthentication.getState(), StandardCharsets.UTF_8));
+            }
+
+            redirectStrategy.sendRedirect(request, response, uriBuilder.build(true).toUriString());
+        }
+    }
+
+    static final class Rfc9207ErrorResponseHandler implements AuthenticationFailureHandler {
+
+        private final RedirectStrategy redirectStrategy = seeOtherRedirectStrategy();
+
+        @Override
+        public void onAuthenticationFailure(HttpServletRequest request, HttpServletResponse response,
+                                            AuthenticationException exception) throws IOException {
+            OAuth2AuthorizationCodeRequestAuthenticationException authorizationCodeRequestAuthenticationException =
+                    (OAuth2AuthorizationCodeRequestAuthenticationException) exception;
+            OAuth2Error error = authorizationCodeRequestAuthenticationException.getError();
+            OAuth2AuthorizationCodeRequestAuthenticationToken authorizationCodeRequestAuthentication =
+                    authorizationCodeRequestAuthenticationException.getAuthorizationCodeRequestAuthentication();
+
+            if (authorizationCodeRequestAuthentication == null
+                    || !StringUtils.hasText(authorizationCodeRequestAuthentication.getRedirectUri())) {
+                response.sendError(HttpStatus.BAD_REQUEST.value(), error.toString());
+                return;
+            }
+
+            UriComponentsBuilder uriBuilder = UriComponentsBuilder
+                    .fromUriString(authorizationCodeRequestAuthentication.getRedirectUri())
+                    .queryParam(OAuth2ParameterNames.ERROR, error.getErrorCode())
+                    .queryParam(ISS_PARAMETER_NAME, UriUtils.encode(
+                            AuthorizationServerContextHolder.getContext().getIssuer(), StandardCharsets.UTF_8));
+
+            if (StringUtils.hasText(error.getDescription())) {
+                uriBuilder.queryParam(OAuth2ParameterNames.ERROR_DESCRIPTION,
+                        UriUtils.encode(error.getDescription(), StandardCharsets.UTF_8));
+            }
+            if (StringUtils.hasText(error.getUri())) {
+                uriBuilder.queryParam(OAuth2ParameterNames.ERROR_URI,
+                        UriUtils.encode(error.getUri(), StandardCharsets.UTF_8));
+            }
+            if (StringUtils.hasText(authorizationCodeRequestAuthentication.getState())) {
+                uriBuilder.queryParam(OAuth2ParameterNames.STATE,
+                        UriUtils.encode(authorizationCodeRequestAuthentication.getState(), StandardCharsets.UTF_8));
+            }
+
+            redirectStrategy.sendRedirect(request, response, uriBuilder.build(true).toUriString());
+        }
+
+    }
+
 }
