@@ -8,6 +8,11 @@ option java_multiple_files = true;
 import "google/protobuf/timestamp.proto";
 import "common.proto";
 
+service PaymentService {
+  rpc SubmitTransfer(SubmitTransferRequest) returns (SubmitTransferResponse);
+  rpc GetTransferStatus(GetTransferStatusRequest) returns (GetTransferStatusResponse);
+}
+
 enum PaymentStatus {
   PAYMENT_STATUS_UNSPECIFIED = 0;
   PENDING = 1;
