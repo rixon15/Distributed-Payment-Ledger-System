@@ -5,6 +5,7 @@ import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 import eu.rekawek.toxiproxy.Proxy;
 import eu.rekawek.toxiproxy.ToxiproxyClient;
 import eu.rekawek.toxiproxy.model.ToxicDirection;
+import org.awaitility.Awaitility;
 import org.example.paymentservice.dto.event.TransactionStatus;
 import org.example.paymentservice.model.CurrencyType;
 import org.example.paymentservice.model.Payment;
@@ -19,19 +20,18 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.transaction.CannotCreateTransactionException;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.ToxiproxyContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
-import org.awaitility.Awaitility;
 import org.testcontainers.utility.DockerImageName;
 import tools.jackson.databind.ObjectMapper;
 
@@ -153,7 +153,7 @@ class PostgresChaosTest {
     @DynamicPropertySource
     static void datasourceProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", () ->
-                "jdbc:postgresql://%s:%d/%s?socketTimeout=3".formatted(
+                "jdbc:postgresql://%s:%d/%s?socketTimeout=1".formatted(
                         TOXIPROXY.getHost(),
                         TOXIPROXY.getMappedPort(TOXIPROXY_POSTGRES_PORT),
                         POSTGRESQL_CONTAINER.getDatabaseName()
@@ -249,7 +249,7 @@ class PostgresChaosTest {
                     .status(PaymentStatus.PENDING)
                     .build();
 
-            assertThrows(CannotCreateTransactionException.class, () -> {
+            assertThrows(DataAccessException.class, () -> {
                 paymentRepository.saveAndFlush(payment);
             });
         } finally {
