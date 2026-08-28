@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+package org.example.gateway.ledger;
+
+option java_package = "org.example.grpc.ledger";
+option java_multiple_files = true;
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+service LedgerService {
+  rpc GetBalance(GetBalanceRequest) returns (Balance);
+  rpc ListBalances(ListBalanceRequest) returns (ListBalanceResponse);
+  rpc GetStatement(GetStatementRequest) returns (GetStatementResponse);
+  rpc GetTransaction(GetTransactionRequest) returns (TransactionDetail);
+}
+
+enum AccountStatus {
+  ACCOUNT_STATUS_UNSPECIFIED = 0;
+  ACTIVE = 1;
+  FROZEN = 2;
+  CLOSED = 3;
+}
+
+enum TransactionType {
+  TRANSACTION_TYPE_UNSPECIFIED = 0;
+  DEPOSIT = 1;
+  WITHDRAWAL = 2;
+  TRANSFER = 3;
+  PAYMENT = 4;
+  REFUND = 5;
+  FEE = 6;
+  ADJUSTMENT = 7;
+  INTEREST = 8;
+}
+
+enum TransactionStatus {
+  TRANSACTION_STATUS_UNSPECIFIED = 0;
+  PENDING = 1;
+  POSTED = 2;
+  REJECTED_NSF =3;
+  REJECTED_RISK = 4;
+  REJECTED_INACTIVE = 5;
+  REJECTED_VALIDATION = 6;
+  FAILED = 7;
+  VOID = 8;
+}
+
+enum PostingDirection {
+  POSTING_DIRECTION_UNSPECIFIED = 0;
+  DEBIT = 1;
+  CREDIT = 2;
+}
+
+message GetBalanceRequest {
+  org.example.gateway.common.CurrencyType currency = 1;
+}
+
+message Balance {
+  string account_id = 1;
+  org.example.gateway.common.Money balance = 2;
+  AccountStatus status = 3;
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+message ListBalanceRequest {
+
+}
+
+message ListBalanceResponse {
+  repeated Balance balances = 1;
+}
+
+message GetStatementRequest {
+  org.example.gateway.common.CurrencyType currency = 1;
+  // Optional filters, unset means no filter
+  google.protobuf.Timestamp from = 2;
+  google.protobuf.Timestamp to = 3;
+  TransactionType type_filter = 4;
+
+  int32 page_size = 5;
+  string page_token = 6;
+}
+
+message GetStatementResponse {
+  repeated StatementEntry entries = 1;
+  string next_page_token = 2;
+}
+
+message StatementEntry {
+  string reference_id = 1;
+  TransactionType type = 2;
+  TransactionStatus status = 3;
+  PostingDirection direction = 4;
+  org.example.gateway.common.Money amount = 5;
+  google.protobuf.Timestamp effective_date = 6;
+}
+
+message GetTransactionRequest {
+  string reference_id = 1;
+}
+
+message TransactionDetail {
+  string reference_id = 1;
+  TransactionType type = 2;
+  TransactionStatus status = 3;
+  google.protobuf.Timestamp effective_date = 4;
+  repeated StatementEntry postings = 5;
+}

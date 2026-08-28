@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package org.example.gateway.payment;
+
+option java_package = "org.example.grpc.payment";
+option java_multiple_files = true;
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+enum PaymentStatus {
+  PAYMENT_STATUS_UNSPECIFIED = 0;
+  PENDING = 1;
+  AUTHORIZED = 2;
+  FAILED = 3;
+  COMPLETED = 4;
+  REFUNDED = 5;
+  MANUAL_REVIEW = 6;
+}
+
+message SubmitTransferRequest {
+  string receiver_id = 1;
+  string idempotency_key = 2;
+  org.example.gateway.common.Money amount = 3;
+  int32  max_wait_ms = 4;
+}
+
+message SubmitTransferResponse {
+  oneof result {
+    TerminalResult terminal = 1;
+    PendingResult pending = 2;
+  }
+}
+
+message TerminalResult {
+  string transaction_id = 1;
+  PaymentStatus status = 2;
+  string error_message = 3;
+}
+
+message PendingResult {
+  string transaction_id = 1;
+}
+
+message GetTransferStatusRequest {
+  string transaction_id = 1;
+}
+
+message GetTransferStatusResponse {
+  string transaction_id = 1;
+  PaymentStatus status = 2;
+  org.example.gateway.common.Money amount = 3;
+  string receiver_id = 4;
+  string error_message = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}

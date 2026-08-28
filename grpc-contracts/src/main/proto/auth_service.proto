@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package org.example.gateway.auth;
+
+option java_package = "org.example.grpc.auth";
+option java_multiple_files = true;
+
+import "google/protobuf/timestamp.proto";
+
+service AuthService {
+  /* Exchange an opaque DPoP bound client token for the real, claims bearing access token. Called by t he gateway only
+     on a phantom token cache miss. */
+  rpc ExchangeToken(TokenExchangeRequest) returns (TokenExchangeResponse);
+}
+
+message TokenExchangeRequest {
+  string opaque_token = 1;
+  /* Raw DPoP proof JWT from the client's DPoP header. Used here only to verify 'ath' proof of possession over
+     opaque_token and the proof's signature against 'cnf.jkt'. htm/htu are NOT validated here, they bind the proof
+     to the original HTTP request, which only the gateway sees ever. */
+  string dpop_proof = 2;
+}
+
+message TokenExchangeResponse {
+  oneof result {
+    ResolvedToken resolved = 1;
+    InvalidToken invalid = 2;
+  }
+}
+
+message ResolvedToken {
+  string access_token = 1;
+  /* JWK thumbprint the token is DPoP-bound to cnf.jkt. Cached by the
+     gateway alongside access_token so cache hits can validate DPoP locally. */
+  string cnf_jkt = 2;
+  /* Real expiry of access_token - drives the gateway's cache TTL directly
+     instead of a fixed 30-60s constant, so the cache can never outlive the token */
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+message InvalidToken {
+  InvalidReason reason = 1;
+}
+
+enum InvalidReason {
+  INVALID_REASON_UNSPECIFIED = 0;
+  EXPIRED = 1;
+  REVOKED = 2;
+  MALFORMED = 3;
+  DPOP_MISMATCH = 4;
+}

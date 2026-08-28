@@ -14,6 +14,8 @@
         <module>ledger-service</module>
         <module>payment-service</module>
         <module>authorization-service</module>
+        <module>gateway-service</module>
+        <module>grpc-contracts</module>
     </modules>
 
     <properties>
