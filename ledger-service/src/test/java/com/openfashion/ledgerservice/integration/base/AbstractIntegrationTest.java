@@ -1,5 +1,6 @@
 package com.openfashion.ledgerservice.integration.base;
 
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
@@ -7,7 +8,16 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.utility.DockerImageName;
 
+/**
+ * Subclasses share these static containers but must NOT share the Spring context: with
+ * identical inherited {@code @DynamicPropertySource} config, Spring's context cache treats
+ * them as interchangeable and reuses one ApplicationContext (and its Kafka consumer / Redis
+ * connection beans) across classes. A batch left in-flight by one test class then gets
+ * redelivered into the next class's DB/Redis state, causing cross-test contamination.
+ * {@code @DirtiesContext} forces a fresh context (and a clean parallel-consumer rejoin) per class.
+ */
 @SuppressWarnings("resource")
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 public abstract class AbstractIntegrationTest {
 
     static final PostgreSQLContainer<?> POSTGRESQL_CONTAINER = new PostgreSQLContainer<>("postgres:16-alpine")

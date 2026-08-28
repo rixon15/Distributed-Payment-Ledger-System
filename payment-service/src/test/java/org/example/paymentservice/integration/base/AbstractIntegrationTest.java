@@ -4,6 +4,7 @@ import org.example.paymentservice.model.PaymentType;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
@@ -17,7 +18,16 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Subclasses share these static containers but must NOT share the Spring context: with
+ * identical inherited {@code @DynamicPropertySource} config, Spring's context cache treats
+ * them as interchangeable and reuses one ApplicationContext (and its Kafka listener / Redis
+ * connection beans) across classes. A message left in-flight by one test class can then be
+ * redelivered into the next class's DB/Redis state, causing cross-test contamination.
+ * {@code @DirtiesContext} forces a fresh context per class.
+ */
 @SuppressWarnings("resource")
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 public abstract class AbstractIntegrationTest {
 
     @Autowired
