@@ -28,7 +28,7 @@ class DpopProofValidatorTest {
 
     private static final String OPAQUE_TOKEN = "opaque-test-token";
     private static final String HTTP_METHOD = "GET";
-    private static final String HTTP_URI = "http://gateway.internal/balance";
+    private static final String HTTP_URI = "https://gateway.internal/balance";
 
     private ECKey ecJwk;
     private DpopProofValidator validator;
