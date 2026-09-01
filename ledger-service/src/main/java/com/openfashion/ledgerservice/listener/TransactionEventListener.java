@@ -64,7 +64,12 @@ public class TransactionEventListener {
     public void stopConsuming() {
         if(parallelConsumer != null) {
             log.info("Closing Parallel Consumer for TransactionEventListener");
-            parallelConsumer.close();
+            // Drain in-flight batches before returning so dependent beans (Redis, DB)
+            // aren't torn down while a worker thread is still mid-processing; a plain
+            // close() can return before workers finish, causing them to hit a stopped
+            // LettuceConnectionFactory and fail the batch, which then gets redelivered
+            // on the next context (e.g. the next test class sharing the broker).
+            parallelConsumer.closeDrainFirst(Duration.ofSeconds(60));
         }
     }
 
