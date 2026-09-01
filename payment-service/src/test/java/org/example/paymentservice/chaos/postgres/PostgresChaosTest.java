@@ -23,7 +23,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -250,12 +249,9 @@ class PostgresChaosTest {
                     .status(PaymentStatus.PENDING)
                     .build();
 
-            Exception thrown = assertThrows(Exception.class, () -> {
+            assertThrows(DataAccessException.class, () -> {
                 paymentRepository.saveAndFlush(payment);
             });
-
-            assertThat(thrown)
-                    .isInstanceOfAny(DataAccessException.class, CannotCreateTransactionException.class);
         } finally {
             postgresProxy.toxics().get("postgres-latency").remove();
         }
