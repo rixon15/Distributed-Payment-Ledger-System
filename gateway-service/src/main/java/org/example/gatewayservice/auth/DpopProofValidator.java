@@ -25,7 +25,7 @@ import java.util.Date;
 @Component
 public class DpopProofValidator {
 
-    private static final Duration FRESHNESS_WINDOW = Duration.ofSeconds(60);
+    static final Duration FRESHNESS_WINDOW = Duration.ofSeconds(60);
     private static final JOSEObjectType DPOP_TYPE = new JOSEObjectType("dpop+jwt");
 
     public String validate(DpopValidationRequest request) {
