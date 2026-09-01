@@ -16,13 +16,18 @@ public class GrpcClientConfig {
     }
 
     @Bean
-    LedgerServiceGrpc.LedgerServiceBlockingStub ledgerServiceBlockingStub(GrpcChannelFactory channels) {
-        return LedgerServiceGrpc.newBlockingStub(channels.createChannel("ledger-service"));
+    LedgerServiceGrpc.LedgerServiceBlockingStub ledgerServiceBlockingStub(
+            GrpcChannelFactory channels, ResolvedTokenClientInterceptor interceptor) {
+
+        return LedgerServiceGrpc.newBlockingStub(channels.createChannel("ledger-service"))
+                .withInterceptors(interceptor);
     }
 
     @Bean
-    PaymentServiceGrpc.PaymentServiceBlockingStub paymentServiceBlockingStub(GrpcChannelFactory channels) {
-        return PaymentServiceGrpc.newBlockingStub(channels.createChannel("payment-service"));
+    PaymentServiceGrpc.PaymentServiceBlockingStub paymentServiceBlockingStub(
+            GrpcChannelFactory channels, ResolvedTokenClientInterceptor interceptor) {
+        return PaymentServiceGrpc.newBlockingStub(channels.createChannel("payment-service"))
+                .withInterceptors(interceptor);
     }
 
 }
