@@ -36,6 +36,22 @@ services:
       timeout: 3s
       retries: 5
 
+  gateway-redis:
+    image: redis:7-alpine
+    container_name: gateway_redit
+    ports:
+      - "${GATEWAY_REDIS_HOST_PORT}:6379"
+    command: redis-server --appendonly yes --requirepass "${GATEWAY_REDIS_PASSWORD}"
+    volumes:
+      - gateway_redis_data:/data
+    networks:
+      - payment-network
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   localstack:
     image: localstack/localstack:4.4.0
     container_name: auth_localstack
@@ -173,6 +189,7 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  gateway_redis_data:
   localstack_data:
 
 networks:
