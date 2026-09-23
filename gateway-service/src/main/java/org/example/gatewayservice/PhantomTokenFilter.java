@@ -10,6 +10,7 @@ import org.example.gatewayservice.auth.ResolvedTokenContext;
 import org.example.gatewayservice.auth.TokenResolutionRequest;
 import org.example.gatewayservice.auth.exception.DpopValidationException;
 import org.example.gatewayservice.auth.exception.TokenResolutionException;
+import org.example.gatewayservice.core.config.GatewayProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -22,6 +23,7 @@ public class PhantomTokenFilter extends OncePerRequestFilter {
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final PhantomTokenResolver phantomTokenResolver;
+    private final GatewayProperties gatewayProperties;
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) throws ServletException {
@@ -42,8 +44,8 @@ public class PhantomTokenFilter extends OncePerRequestFilter {
             }
 
             String resolvedJwt = phantomTokenResolver.resolve(new TokenResolutionRequest(
-                    opaqueToken, dpopProof, request.getMethod(), request.getRequestURI().toString()
-            ));
+                    opaqueToken, dpopProof, request.getMethod(),
+                    gatewayProperties.publicBaseUrl() + request.getRequestURI()));
 
             ResolvedTokenContext.set(resolvedJwt);
             filterChain.doFilter(request, response);
