@@ -1,4 +1,4 @@
-package org.example.grpcauth;
+package org.example.grpcauth.exception;
 
 /**
  * Thrown when an authenticated caller lacks a scope the called method requires.
@@ -6,7 +6,7 @@ package org.example.grpcauth;
  * <p>The message names the missing scope for server-side logs only; the caller receives a generic
  * {@code PERMISSION_DENIED}.
  */
-public class InsufficientScopeException extends RuntimeException{
+public class InsufficientScopeException extends RuntimeException {
 
     private final String requiredScope;
 

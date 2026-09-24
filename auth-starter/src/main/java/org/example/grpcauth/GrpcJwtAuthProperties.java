@@ -42,7 +42,7 @@ public record GrpcJwtAuthProperties(
         @DefaultValue("5m") Duration maxTokenAge,
         @DefaultValue("grpc.health.v1.Health/*") List<String> publicMethods,
         @DefaultValue Jwks jwks
-        ) {
+) {
 
     private static final String PREFIX = "grpc.auth.";
     private static final Pattern METHOD_PATTERN = Pattern.compile("[^/\\s]+/([^/\\s*]+|\\*)");
@@ -61,12 +61,13 @@ public record GrpcJwtAuthProperties(
             requirePositive(maxTokenAge, "max-token-age");
 
             if (maxTokenAge.compareTo(clockSkew) <= 0)
-                throw new IllegalArgumentException(PREFIX + "max-token-age must be greater than " + PREFIX + "clock-skew");
+                throw new IllegalArgumentException(PREFIX + "max-token-age must be greater than "
+                        + PREFIX + "clock-skew");
 
             for (String method : publicMethods) {
                 if (!METHOD_PATTERN.matcher(method).matches()) {
                     throw new IllegalArgumentException(PREFIX + "public-methods entry '" + method
-                    + "' must be 'package.Service/*' or 'package.Service/Method'");
+                            + "' must be 'package.Service/*' or 'package.Service/Method'");
                 }
 
             }
@@ -86,9 +87,11 @@ public record GrpcJwtAuthProperties(
 
     /**
      * @param cacheTtl        how long a fetched JWK Set is served from cache
-     * @param refreshAhead    how long before cache expiry a background refresh starts
+     * @param refreshAhead    how long before cache expiry a background refresh starts; together with the refresh
+     *                        timeout (see refreshTimeout()) it must fit within cache-ttl
      * @param outageTolerance how long the last fetched JWK Set keeps being used while the endpoint is unreachable
-     * @param rateLimit       minimum interval between fetches, including fetches triggered by an unknown 'kid'
+     * @param rateLimit       window opened by a fetch in which at most one further fetch is allowed, including
+     *                        fetches triggered by an unknown 'kid'; must be shorter than cache-ttl
      * @param connectTimeout  connect timeout for the JWK Set endpoint
      * @param readTimeout     read timeout for the JWK Set endpoint
      */
@@ -110,10 +113,28 @@ public record GrpcJwtAuthProperties(
             requirePositive(connectTimeout, JWKS_PREFIX + "connect-timeout");
             requirePositive(readTimeout, JWKS_PREFIX + "read-timeout");
 
-            if(refreshAhead.compareTo(cacheTtl) >= 0) {
-                throw new IllegalArgumentException(PREFIX + "jwks.refresh-ahead must be shorter than "
-                + PREFIX + "jwks.cache-ttl");
+            // Nimbus rejects both combinations at build time; checking here names the properties to fix
+            if (refreshAhead.plus(refreshTimeout(connectTimeout, readTimeout)).compareTo(cacheTtl) > 0) {
+                throw new IllegalArgumentException(PREFIX + "jwks.refresh-ahead plus twice (" + PREFIX
+                        + "jwks.connect-timeout + " + PREFIX + "jwks.read-timeout) must not exceed " + PREFIX +
+                        "jwks.cache-ttl");
             }
+
+            if (rateLimit.compareTo(cacheTtl) >= 0) {
+                throw new IllegalArgumentException(PREFIX + "jwks.rate-limit must be shorter than " + PREFIX
+                        + "jwks.cache-ttl");
+            }
+        }
+
+        /**
+         * @return how long a request waits for a JWK Set refresh already in progress: one fetch plus its one retry
+         */
+        public Duration refreshTimeout() {
+            return refreshTimeout(connectTimeout, readTimeout);
+        }
+
+        private static Duration refreshTimeout(Duration connectTimeout, Duration readTimeout) {
+            return connectTimeout.plus(readTimeout).multipliedBy(2);
         }
     }
 

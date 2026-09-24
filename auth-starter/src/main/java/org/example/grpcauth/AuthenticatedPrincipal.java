@@ -1,5 +1,7 @@
 package org.example.grpcauth;
 
+import org.example.grpcauth.exception.InsufficientScopeException;
+
 import java.time.Instant;
 import java.util.Objects;
 import java.util.Set;

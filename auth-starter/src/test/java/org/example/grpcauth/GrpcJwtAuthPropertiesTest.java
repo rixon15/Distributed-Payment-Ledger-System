@@ -131,9 +131,9 @@ class GrpcJwtAuthPropertiesTest {
     @Test
     void rejectsMissingJwksUri() {
         Map<String, String> props = required();
-        props.remove("grpc.auth.audience");
+        props.remove("grpc.auth.jwks-uri");
 
-        assertBindFails(props, "grpc.auth.audience must be set");
+        assertBindFails(props, "grpc.auth.jwks-uri must be set");
     }
 
     @ParameterizedTest
@@ -208,10 +208,27 @@ class GrpcJwtAuthPropertiesTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"5m", "10m"})
-    void rejectsRefreshAheadNotShorterThanCacheTtl(String refreshAhead) {
+    @ValueSource(strings = {"298s", "10m"})
+    void rejectsRefreshAheadThatLeavesNoRoomForTheRefreshTimeout(String refreshAhead) {
+        // Default refresh timeout is 2 * (500ms + 1s) = 3s, so at most 297s of the 5m cache-ttl is left
+
         assertBindFails(requiredWith("grpc.auth.jwks.refresh-ahead", refreshAhead),
-                "grpc.auth.jwks.refresh-ahead must be shorter than grpc.auth.jwks.cache-ttl");
+                "grpc.auth.jwks.refresh-ahead plus twice (grpc.auth.jwks.connect-timeout + "
+                        + "grpc.auth.jwks.read-timeout) must not exceed grpc.auth.jwks.cache-ttl");
+    }
+
+    @Test
+    void acceptsRefreshAheadThatExactlyFillsTheCacheTtl() {
+        GrpcJwtAuthProperties props = bind(requiredWith("grpc.auth.jwks.refresh-ahead", "297s"));
+
+        assertThat(props.jwks().refreshTimeout()).isEqualTo(Duration.ofSeconds(3));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"5m", "10m"})
+    void rejectsRateLimitNotShorterThanCacheTtl(String rateLimit) {
+        assertBindFails(requiredWith("grpc.auth.jwks.rate-limit", rateLimit),
+                "grpc.auth.jwks.rate-limit must be shorter than grpc.auth.jwks.cache-ttl");
     }
 
     @Test

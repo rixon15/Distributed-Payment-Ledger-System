@@ -1,5 +1,6 @@
 package org.example.grpcauth;
 
+import org.example.grpcauth.exception.InsufficientScopeException;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
