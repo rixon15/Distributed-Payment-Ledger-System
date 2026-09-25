@@ -18,11 +18,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.grpc.server.exception.GrpcExceptionHandlerInterceptor;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -34,11 +30,12 @@ import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.example.grpcauth.TestGrpc.method;
 import static org.example.grpcauth.TestTokens.*;
 
 /**
  * Runs the interceptor in an in-process server behind Spring gRPC's exception handler interceptor, the way the
- * autoconfiguration wires it. Methods are hand-built with a String marshaller, so no generated stubs are needed.
+ * autoconfiguration wires it. Methods come from {@link TestGrpc}, so no generated stubs are needed.
  */
 class JwtAuthServerInterceptorTest {
 
@@ -238,32 +235,4 @@ class JwtAuthServerInterceptorTest {
                     assertThat(e.getStatus().getDescription()).isEqualTo(description);
                 });
     }
-
-    private static MethodDescriptor<String, String> method(String fullName) {
-        return MethodDescriptor.<String, String>newBuilder()
-                .setType(MethodDescriptor.MethodType.UNARY)
-                .setFullMethodName(fullName)
-                .setRequestMarshaller(StringMarshaller.INSTANCE)
-                .setResponseMarshaller(StringMarshaller.INSTANCE)
-                .build();
-    }
-
-    private enum StringMarshaller implements MethodDescriptor.Marshaller<String> {
-        INSTANCE;
-
-        @Override
-        public InputStream stream(String value) {
-            return new ByteArrayInputStream(value.getBytes(StandardCharsets.UTF_8));
-        }
-
-        @Override
-        public String parse(InputStream stream) {
-            try (stream) {
-                return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
-            }
-        }
-    }
-
 }
