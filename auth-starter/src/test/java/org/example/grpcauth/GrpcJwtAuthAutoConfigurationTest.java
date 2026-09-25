@@ -26,6 +26,7 @@ import org.springframework.grpc.server.GlobalServerInterceptor;
 import org.springframework.grpc.server.exception.GrpcExceptionHandlerInterceptor;
 import org.springframework.grpc.server.service.GrpcServiceConfigurer;
 import org.springframework.grpc.server.service.GrpcServiceSpec;
+import org.springframework.util.ClassUtils;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -56,6 +57,17 @@ class GrpcJwtAuthAutoConfigurationTest {
     void isListedForAutoConfiguration() {
         assertThat(ImportCandidates.load(AutoConfiguration.class, getClass().getClassLoader()))
                 .contains(GrpcJwtAuthAutoConfiguration.class.getName());
+    }
+
+    /**
+     * A misspelled 'beforeName' is silently ignored, and alphabetical sorting currently hides the mistake.
+     */
+    @Test
+    void ordersBeforeExistingAutoConfigurations() {
+        String[] before = GrpcJwtAuthAutoConfiguration.class.getAnnotation(AutoConfiguration.class).beforeName();
+
+        assertThat(before).isNotEmpty().allSatisfy(name -> assertThat(ClassUtils.isPresent(name, null))
+                .as("class %s is on the classpath", name).isTrue());
     }
 
     @Test

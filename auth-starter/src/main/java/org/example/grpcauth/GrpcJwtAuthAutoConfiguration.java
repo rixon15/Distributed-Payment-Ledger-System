@@ -25,8 +25,8 @@ import org.springframework.grpc.server.exception.GrpcExceptionHandler;
  * that interceptor, {@code requireScope} and {@code requirePrincipal} failures reach the caller as {@code UNKNOWN}.
  * Setting 'spring.grpc.server.exception-handler.enabled' to false has the same effect.
  */
-@AutoConfiguration(beforeName = "org.springframework.boot.gprc.server.autoconfigure.exception"
-+ ".GrpcExceptionHandlerAutoConfiguration")
+@AutoConfiguration(beforeName = "org.springframework.boot.grpc.server.autoconfigure.exception"
+        + ".GrpcExceptionHandlerAutoConfiguration")
 @ConditionalOnClass({ServerInterceptor.class, GlobalServerInterceptor.class, JWKSource.class})
 @ConditionalOnBooleanProperty(name = "grpc.auth.enabled", matchIfMissing = true)
 @EnableConfigurationProperties(GrpcJwtAuthProperties.class)

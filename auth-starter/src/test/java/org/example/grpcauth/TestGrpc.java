@@ -1,6 +1,7 @@
 package org.example.grpcauth;
 
 import io.grpc.MethodDescriptor;
+
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -40,5 +41,4 @@ final class TestGrpc {
             }
         }
     }
-
 }

@@ -77,6 +77,7 @@
             <artifactId>grpc-inprocess</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Only to test the interplay with Spring gRPC's interceptor ordering and exception handling -->
         <dependency>
             <groupId>org.springframework.grpc</groupId>
             <artifactId>spring-grpc-server-spring-boot-autoconfigure</artifactId>
