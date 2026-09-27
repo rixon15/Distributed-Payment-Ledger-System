@@ -87,6 +87,16 @@ jobs:
           ./mvnw verify \
             -DexcludeTests='**/*ConsumerContractTest.java,**/*ProviderContractTest.java'
 
+      # The starter has no Pact tests, so it skips phases 1-2 and runs verify directly.
+      # verify also runs the JaCoCo 80% instruction-coverage gate.
+      - name: 5. Run Full Suite & JaCoCo Coverage (gRPC JWT Auth Starter)
+        run: |
+          set -euo pipefail
+
+          cd auth-starter
+          chmod +x mvnw
+          ./mvnw verify
+
       - name: Upload JaCoCo Reports
         uses: actions/upload-artifact@v4
         if: always()
@@ -95,3 +105,4 @@ jobs:
           path: |
             payment-service/target/site/jacoco/
             ledger-service/target/site/jacoco/
+            auth-starter/target/site/jacoco/
