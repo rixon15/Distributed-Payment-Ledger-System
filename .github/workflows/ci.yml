@@ -1,108 +1,101 @@
-name: Microservices CI Pipeline
+name: CI
 
+# Full suite: the merge gate. Feature-branch pushes get the fast lane in push-checks.yml instead.
 on:
   push:
-    branches:
-      - main
-      - feature/**
-      - bugfix/**
-      - hotfix/**
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
-jobs:
-  build-and-test:
-    name: Build, Test, and Verify Contracts
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+# One run per PR/branch; a newer push cancels the older run, except on main where every commit gets a result
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
-    defaults:
-      run:
-        shell: bash
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: Test (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # Let every module finish so one red job doesn't hide failures in the others
+      fail-fast: false
+      matrix:
+        module: [payment-service, ledger-service, authorization-service, auth-starter]
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Amazon Corretto JDK 25
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '25'
-          distribution: 'corretto'
-          java-package: jdk
-          cache: 'maven'
+          distribution: corretto
+          cache: maven
 
-      # ---------------------------------------------------------
-      # PHASE 1: CONSUMERS GENERATE THE CONTRACTS FIRST
-      # ---------------------------------------------------------
-      - name: 1. Run Consumer Tests (Generate Pacts)
-        run: |
-          set -euo pipefail
+      # -am builds sibling modules this one depends on (e.g. grpc-contracts) without running their tests;
+      # their own matrix entries test them
+      - name: Build dependencies
+        run: ./mvnw -B -ntp -pl "${{ matrix.module }}" -am install -DskipTests
 
-          cd ledger-service
-          chmod +x mvnw
-          ./mvnw clean test -Dtest='*ConsumerContractTest'
+      # Includes Pact provider verification against the committed pact files, and the JaCoCo gate
+      - name: Verify
+        run: ./mvnw -B -ntp -pl "${{ matrix.module }}" verify
 
-          cd ../payment-service
-          chmod +x mvnw
-          ./mvnw clean test -Dtest='*ConsumerContractTest'
-
-      # ---------------------------------------------------------
-      # PHASE 2: PROVIDERS VERIFY THE NEWLY GENERATED CONTRACTS
-      # ---------------------------------------------------------
-      - name: 2. Run Provider Tests (Verify Pacts)
-        run: |
-          set -euo pipefail
-
-          cd payment-service
-          chmod +x mvnw
-          ./mvnw test -Dtest='*ProviderContractTest'
-
-          cd ../ledger-service
-          chmod +x mvnw
-          ./mvnw test -Dtest='*ProviderContractTest'
-
-      # ---------------------------------------------------------
-      # PHASE 3: RUN THE REST OF THE SUITE & CHECK COVERAGE
-      # ---------------------------------------------------------
-      # Instead of relying on a negated Surefire pattern, we run verify
-      # and exclude contract tests through Surefire system properties.
-      - name: 3. Run Full Suite & JaCoCo Coverage (Payment Service)
-        run: |
-          set -euo pipefail
-
-          cd payment-service
-          chmod +x mvnw
-          ./mvnw verify \
-            -DexcludeTests='**/*ConsumerContractTest.java,**/*ProviderContractTest.java'
-
-      - name: 4. Run Full Suite & JaCoCo Coverage (Ledger Service)
-        run: |
-          set -euo pipefail
-
-          cd ledger-service
-          chmod +x mvnw
-          ./mvnw verify \
-            -DexcludeTests='**/*ConsumerContractTest.java,**/*ProviderContractTest.java'
-
-      # The starter has no Pact tests, so it skips phases 1-2 and runs verify directly.
-      # verify also runs the JaCoCo 80% instruction-coverage gate.
-      - name: 5. Run Full Suite & JaCoCo Coverage (gRPC JWT Auth Starter)
-        run: |
-          set -euo pipefail
-
-          cd auth-starter
-          chmod +x mvnw
-          ./mvnw verify
-
-      - name: Upload JaCoCo Reports
-        uses: actions/upload-artifact@v4
+      - name: Upload JaCoCo report
         if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: jacoco-coverage-reports
-          path: |
-            payment-service/target/site/jacoco/
-            ledger-service/target/site/jacoco/
-            auth-starter/target/site/jacoco/
+          name: jacoco-${{ matrix.module }}
+          path: ${{ matrix.module }}/target/site/jacoco/
+          if-no-files-found: ignore
+
+  pact-drift:
+    name: Pact drift (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [payment-service, ledger-service]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: corretto
+          cache: maven
+
+      - name: Build dependencies
+        run: ./mvnw -B -ntp -pl "${{ matrix.module }}" -am install -DskipTests
+
+      - name: Regenerate consumer pacts
+        run: ./mvnw -B -ntp -pl "${{ matrix.module }}" test -Dtest='*ConsumerContractTest'
+
+      # Providers verify the committed files, so a consumer change without a regenerated pact would go unnoticed
+      - name: Fail if committed pacts are stale
+        run: |
+          if ! git diff --exit-code -- "${{ matrix.module }}/src/test/resources/pacts"; then
+            echo "::error::Pact files in ${{ matrix.module }} are out of date; run its *ConsumerContractTest and commit the result"
+            exit 1
+          fi
+
+  # Single stable check for branch protection, so adding a module never means editing the ruleset.
+  # always() matters: without it a failed dependency makes this job 'skipped', which GitHub counts as passing.
+  ci-ok:
+    name: CI OK
+    needs: [test, pact-drift]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          [[ "${{ needs.test.result }}" == success && "${{ needs.pact-drift.result }}" == success ]]
