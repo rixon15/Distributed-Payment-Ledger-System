@@ -26,6 +26,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.TransactionException;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.ToxiproxyContainer;
@@ -42,7 +43,7 @@ import java.util.UUID;
 
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest
 @Testcontainers
@@ -236,26 +237,40 @@ class PostgresChaosTest {
 
     @Test
     void shouldFailFastWhenPostgresExperiencesSevereLatency() throws Exception {
-        postgresProxy.toxics().latency("postgres-latency", ToxicDirection.DOWNSTREAM, 3000);
+        // Well above every client-side timeout (socketTimeout 1s, Hikari connection-timeout 2s), so a failure under
+        // the bound below proves a timeout cut the write off rather than it completing slowly
+        postgresProxy.toxics().latency("postgres-latency", ToxicDirection.DOWNSTREAM, 5000);
+
+        String idempotencyKey = "idem-" + UUID.randomUUID();
 
         try {
             Payment payment = Payment.builder()
                     .userId(UUID.randomUUID())
                     .receiverId(UUID.randomUUID())
                     .type(PaymentType.TRANSFER)
-                    .idempotencyKey("idem-" + UUID.randomUUID())
+                    .idempotencyKey(idempotencyKey)
                     .amount(new BigDecimal("100.0000"))
                     .currency(CurrencyType.USD)
                     .status(PaymentStatus.PENDING)
                     .build();
 
-            assertThrows(DataAccessException.class, () -> {
-                paymentRepository.saveAndFlush(payment);
-            });
+            long start = System.nanoTime();
+
+            // Where the timeout lands depends on the pooled connection: one used within Hikari's 500ms bypass window
+            // skips validation and the INSERT hits socketTimeout (DataAccessException); an idler one fails validation
+            // and acquisition times out as the transaction begins (CannotCreateTransactionException). Both are the
+            // fail-fast behaviour under test.
+            assertThatThrownBy(() -> paymentRepository.saveAndFlush(payment))
+                    .isInstanceOfAny(DataAccessException.class, TransactionException.class);
+            assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofSeconds(4));
         } finally {
             postgresProxy.toxics().get("postgres-latency").remove();
         }
 
+        // The toxic only delays responses, so the INSERT did reach Postgres: it must have been rolled back
+        Integer persisted = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM payments WHERE idempotency_key = ?", Integer.class, idempotencyKey);
+        assertThat(persisted).isZero();
     }
 
     private void cutPostgresFor(Duration duration, ThrowingRunnable action) throws Exception {
