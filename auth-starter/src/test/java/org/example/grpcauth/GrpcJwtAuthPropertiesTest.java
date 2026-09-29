@@ -29,6 +29,7 @@ class GrpcJwtAuthPropertiesTest {
         props.put("grpc.auth.issuer", "http://localhost:9000");
         props.put("grpc.auth.audience", "ledger-service");
         props.put("grpc.auth.jwks-uri", "http://localhost:9000/oauth2/jwks");
+        props.put("grpc.auth.allow-insecure-jwks-uri", "true");
         return props;
     }
 
@@ -149,6 +150,23 @@ class GrpcJwtAuthPropertiesTest {
         assertThat(props.jwksUri().getScheme()).isEqualTo("https");
     }
 
+    @Test
+    void rejectsHttpJwksUriByDefault() {
+        Map<String, String> props = required();
+        props.remove("grpc.auth.allow-insecure-jwks-uri");
+
+        assertBindFails(props, "grpc.auth.jwks-uri must be https; set grpc.auth.allow-insecure-jwks-uri=true to "
+                + "accept http for local development only");
+    }
+
+    @Test
+    void acceptsHttpJwksUriWhenExplicitlyAllowed() {
+        GrpcJwtAuthProperties props = bind(required());
+
+        assertThat(props.allowInsecureJwksUri()).isTrue();
+        assertThat(props.jwksUri().getScheme()).isEqualTo("http");
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"HS256", "none", "PS257"})
     void rejectsSymmetricNoneAndUnknownAlgorithms(String algorithm) {
@@ -236,7 +254,7 @@ class GrpcJwtAuthPropertiesTest {
         List<String> algorithms = new java.util.ArrayList<>(List.of("PS256"));
         List<String> publicMethods = new java.util.ArrayList<>(List.of("grpc.health.v1.Health/*"));
         GrpcJwtAuthProperties props = new GrpcJwtAuthProperties(true, "http://localhost:9000", "ledger-service",
-                URI.create("http://localhost:9000/oauth2/jwks"), algorithms, "at+jwt", Duration.ofSeconds(30),
+                URI.create("http://localhost:9000/oauth2/jwks"), true, algorithms, "at+jwt", Duration.ofSeconds(30),
                 Duration.ofMinutes(5), publicMethods, bind(required()).jwks());
 
         algorithms.add("RS256");
@@ -251,7 +269,7 @@ class GrpcJwtAuthPropertiesTest {
     @Test
     void rejectsNullJwksWhenEnabled() {
         assertThatThrownBy(() -> new GrpcJwtAuthProperties(true, "http://localhost:9000", "ledger-service",
-                URI.create("http://localhost:9000/oauth2/jwks"), List.of("PS256"), "at+jwt", Duration.ofSeconds(30),
+                URI.create("http://localhost:9000/oauth2/jwks"), true, List.of("PS256"), "at+jwt", Duration.ofSeconds(30),
                 Duration.ofMinutes(5), List.of(), null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("grpc.auth.jwks must be set");

@@ -23,6 +23,8 @@ import java.util.stream.Collectors;
  * @param issuer        expected 'iss' claim, compared exactly
  * @param audience      identifier of this service, which must appear in the token's 'aud' claim
  * @param jwksUri       JWK Set endpoint of the authorization server
+ * @param allowInsecureJwksUri whether an 'http' jwks-uri is accepted; the JWK Set is the trust root for every token,
+ *                      so fetching it in plaintext lets an on-path attacker substitute keys. Local development only
  * @param algorithms    accepted JWS algorithms; only asymmetric signature algorithms are allowed
  * @param tokenType     required 'typ' header value ('at+jwt' per RFC 9068)
  * @param clockSkew     tolerance applied to the 'exp', 'nbf' and 'iat' checks
@@ -36,6 +38,7 @@ public record GrpcJwtAuthProperties(
         String issuer,
         String audience,
         URI jwksUri,
+        @DefaultValue("false") boolean allowInsecureJwksUri,
         @DefaultValue("PS256") List<String> algorithms,
         @DefaultValue("at+jwt") String tokenType,
         @DefaultValue("30s") Duration clockSkew,
@@ -54,7 +57,7 @@ public record GrpcJwtAuthProperties(
         if (enabled) {
             requireText(issuer, "issuer");
             requireText(audience, "audience");
-            requireHttpUri(jwksUri, "jwks-uri");
+            requireJwksUri(jwksUri, allowInsecureJwksUri);
             requireSignatureAlgorithms(algorithms);
             requireText(tokenType, "token-type");
             requireNonNegative(clockSkew, "clock-skew");
@@ -143,13 +146,18 @@ public record GrpcJwtAuthProperties(
             throw new IllegalArgumentException(PREFIX + name + " must be set");
     }
 
-    private static void requireHttpUri(URI value, String name) {
-        if (value == null)
-            throw new IllegalArgumentException(PREFIX + name + " must be set");
+    private static void requireJwksUri(URI value, boolean allowInsecureJwksUri) {
+        if (value == null) throw new IllegalArgumentException(PREFIX + "jwks-uri must be set");
 
         String scheme = value.getScheme();
-        if (!value.isAbsolute() || !("https".equalsIgnoreCase(scheme) || "http".equalsIgnoreCase(scheme)))
-            throw new IllegalArgumentException(PREFIX + name + " must be an absolute http(s) URI");
+        if (!value.isAbsolute() || !("https".equalsIgnoreCase(scheme) || "http".equalsIgnoreCase(scheme))) {
+            throw new IllegalArgumentException(PREFIX + "jwks-uri must be an absolute http(s) URI");
+        }
+
+        if ("http".equalsIgnoreCase(scheme) && !allowInsecureJwksUri) {
+            throw new IllegalArgumentException(PREFIX + "jwks-uri must be https; set " + PREFIX +
+                    "allow-insecure-jwks-uri=true to accept http for local development only");
+        }
     }
 
     private static void requireSignatureAlgorithms(List<String> algorithms) {

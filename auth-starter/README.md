@@ -66,6 +66,7 @@ grpc:
     issuer: http://localhost:9000
     audience: ledger-service
     jwks-uri: http://localhost:9000/oauth2/jwks
+    allow-insecure-jwks-uri: true   # local dev only; production must use https
 ```
 
 Read the caller in service code:
@@ -117,7 +118,8 @@ is no allow-all fallback.
 | `enabled` | `true` | `false` registers nothing: calls are not authenticated |
 | `issuer` | — (required) | expected `iss`, exact match |
 | `audience` | — (required) | this service's identifier, must be in `aud` |
-| `jwks-uri` | — (required) | absolute `http(s)` URI of the JWK Set |
+| `jwks-uri` | — (required) | absolute `https` URI of the JWK Set (`http` only with `allow-insecure-jwks-uri`) |
+| `allow-insecure-jwks-uri` | `false` | accept an `http` `jwks-uri`. The JWK Set is the trust root, so fetching it in plaintext lets an on-path attacker forge tokens; local dev only, logged as a warning at startup |
 | `algorithms` | `PS256` | asymmetric JWS algorithms only |
 | `token-type` | `at+jwt` | required `typ` header |
 | `clock-skew` | `30s` | applied to `exp`, `nbf` and `iat` |

@@ -15,7 +15,7 @@ import java.util.regex.Pattern;
  *
  * <p>On success the {@link AuthenticatedPrincipal} is attached to the call's {@link Context} (see
  * {@link GrpcAuthContext}) and the 'authorization' header is removed, so the raw token can't be logged or forwarded
- * by the service. On failure the call is closed before it reaches the service:
+ * by the service. Public methods get the header removed too, without it being verified. On failure the call is closed before it reaches the service:
  * <ul>
  *     <li>{@code UNAUTHENTICATED} for a missing, malformed or invalid token;</li>
  *     <li>{@code UNAVAILABLE} when no signing keys can be obtained, which is retryable and says nothing about the
@@ -65,7 +65,11 @@ public class JwtAuthServerInterceptor implements ServerInterceptor {
 
         MethodDescriptor<ReqT, RespT> method = call.getMethodDescriptor();
 
-        if (isPublic(method)) return next.startCall(call, headers);
+        if (isPublic(method)) {
+            // Not verified, but still never handed to the service: it could be logged or forwarded
+            headers.removeAll(AUTHORIZATION);
+            return next.startCall(call, headers);
+        }
 
         AuthenticatedPrincipal principal;
 

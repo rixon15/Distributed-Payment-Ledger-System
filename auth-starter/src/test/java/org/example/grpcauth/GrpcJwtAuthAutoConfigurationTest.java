@@ -51,7 +51,8 @@ class GrpcJwtAuthAutoConfigurationTest {
             .withPropertyValues(
                     "grpc.auth.issuer=" + ISSUER,
                     "grpc.auth.audience=" + AUDIENCE,
-                    "grpc.auth.jwks-uri=" + ISSUER + "/oauth2/jwks");
+                    "grpc.auth.jwks-uri=" + ISSUER + "/oauth2/jwks",
+                    "grpc.auth.allow-insecure-jwks-uri=true");
 
     @Test
     void isListedForAutoConfiguration() {

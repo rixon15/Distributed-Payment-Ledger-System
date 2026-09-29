@@ -72,6 +72,7 @@ final class TestTokens {
         props.put("grpc.auth.issuer", ISSUER);
         props.put("grpc.auth.audience", AUDIENCE);
         props.put("grpc.auth.jwks-uri", ISSUER + "/oauth2/jwks");
+        props.put("grpc.auth.allow-insecure-jwks-uri", "true");
         props.putAll(overrides);
         return new Binder(new MapConfigurationPropertySource(props))
                 .bindOrCreate("grpc.auth", GrpcJwtAuthProperties.class);

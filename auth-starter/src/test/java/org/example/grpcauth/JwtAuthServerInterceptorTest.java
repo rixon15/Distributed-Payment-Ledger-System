@@ -136,6 +136,7 @@ class JwtAuthServerInterceptorTest {
         start(new ImmutableJWKSet<>(new JWKSet(KEY.toPublicJWK())));
 
         assertThat(call(PING, "Bearer " + sign(KEY, claims(NOW).build()))).isEqualTo("anonymous");
+        assertThat(serviceHeaders.get().containsKey(JwtAuthServerInterceptor.AUTHORIZATION)).isFalse();
     }
 
     @Test

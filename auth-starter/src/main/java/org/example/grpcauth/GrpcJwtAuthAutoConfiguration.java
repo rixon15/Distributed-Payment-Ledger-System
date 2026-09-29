@@ -3,6 +3,8 @@ package org.example.grpcauth;
 import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
 import io.grpc.ServerInterceptor;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty;
@@ -32,6 +34,8 @@ import org.springframework.grpc.server.exception.GrpcExceptionHandler;
 @EnableConfigurationProperties(GrpcJwtAuthProperties.class)
 public class GrpcJwtAuthAutoConfiguration {
 
+    private static final Log logger = LogFactory.getLog(GrpcJwtAuthAutoConfiguration.class);
+
     /**
      * Position of {@link JwtAuthServerInterceptor} among global server interceptors; lower runs first (outermost).
      *
@@ -50,6 +54,11 @@ public class GrpcJwtAuthAutoConfiguration {
     @Bean(defaultCandidate = false)
     @ConditionalOnMissingBean(JwtTokenVerifier.class)
     JWKSource<SecurityContext> grpcAuthJwkSource(GrpcJwtAuthProperties properties) {
+        if ("http".equalsIgnoreCase(properties.jwksUri().getScheme())) {
+            logger.warn("Fetching signing keys over plaintext HTTP from " + properties.jwksUri()
+                    + " (grpc.auth.allow-insecure-jwks-uri=true); this must not be used outside local development");
+        }
+
         return JwksSourceFactory.create(properties.jwksUri(), properties.jwks());
     }
 
