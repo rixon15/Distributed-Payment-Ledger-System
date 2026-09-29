@@ -53,6 +53,13 @@ jobs:
           echo "Base: ${base:-<none, testing every module>}"
           echo "Matrix: $matrix"
 
+          # A skipped matrix job never expands its name, so say why on the run's summary page
+          if [[ "$matrix" == "[]" ]]; then
+            echo "No module changes since \`${base:0:7}\`; nothing to test." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Testing: $(jq -r 'map(.module) | join(", ")' <<< "$matrix")" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   test:
     name: Fast (${{ matrix.module }})
     needs: plan
