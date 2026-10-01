@@ -24,9 +24,13 @@ import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
+import org.springframework.security.oauth2.server.authorization.OAuth2Authorization;
+import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
+import org.springframework.security.oauth2.server.authorization.OAuth2TokenType;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.settings.ClientSettings;
+import org.springframework.security.oauth2.server.authorization.settings.OAuth2TokenFormat;
 import org.springframework.security.oauth2.server.authorization.settings.TokenSettings;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -59,6 +63,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class DPoPTokenBindingTest extends AbstractIntegrationTest {
 
     private static final String TEST_CLIENT_ID = "dpop-test-client";
+    private static final String JWT_CLIENT_ID = "dpop-test-jwt-client";
     private static final String REDIRECT_URI = "https://client.example.com/callback";
 
     @Autowired
@@ -66,6 +71,9 @@ class DPoPTokenBindingTest extends AbstractIntegrationTest {
 
     @Autowired
     private RegisteredClientRepository registeredClientRepository;
+
+    @Autowired
+    private OAuth2AuthorizationService authorizationService;
 
     private HttpServer jwksServer;
     private RSAKey clientAssertionKey;
@@ -93,25 +101,8 @@ class DPoPTokenBindingTest extends AbstractIntegrationTest {
 
         jwksServer.start();
 
-        if (registeredClientRepository.findByClientId(TEST_CLIENT_ID) == null) {
-            RegisteredClient testClient = RegisteredClient.withId(UUID.randomUUID().toString())
-                    .clientId(TEST_CLIENT_ID)
-                    .clientAuthenticationMethod(ClientAuthenticationMethod.PRIVATE_KEY_JWT)
-                    .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
-                    .redirectUri(REDIRECT_URI)
-                    .clientSettings(ClientSettings.builder()
-                            .requireProofKey(true)
-                            .requireAuthorizationConsent(false)
-                            .jwkSetUrl("http://localhost:" + jwksServer.getAddress().getPort() + "/jwks")
-                            .tokenEndpointAuthenticationSigningAlgorithm(SignatureAlgorithm.PS256)
-                            .build())
-                    .tokenSettings(TokenSettings.builder()
-                            .authorizationCodeTimeToLive(Duration.ofSeconds(60))
-                            .build())
-                    .build();
-
-            registeredClientRepository.save(testClient);
-        }
+        registerClient(TEST_CLIENT_ID, OAuth2TokenFormat.REFERENCE);
+        registerClient(JWT_CLIENT_ID, OAuth2TokenFormat.SELF_CONTAINED);
 
         String metadataJson = mockMvc.perform(get("/.well-known/oauth-authorization-server"))
                 .andExpect(status().isOk())
@@ -161,11 +152,48 @@ class DPoPTokenBindingTest extends AbstractIntegrationTest {
 
         assertThat(tokenType).isEqualToIgnoringCase("DPoP");
 
-        SignedJWT parsedAccessToken = SignedJWT.parse(accessToken);
-        Map<String, Object> cnf = (Map<String, Object>) parsedAccessToken.getJWTClaimsSet().getClaim("cnf");
+        // Opaque to the client: the binding lives only in the server side authorization record
+        assertThat(accessToken).doesNotContain(".");
+
+        OAuth2Authorization authorization = authorizationService.findByToken(accessToken, OAuth2TokenType.ACCESS_TOKEN);
+        assertThat(authorization).isNotNull();
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> cnf = (Map<String, Object>) authorization.getAccessToken().getClaims().get("cnf");
 
         assertThat(cnf).isNotNull();
         assertThat(cnf.get("jkt")).isEqualTo(dPoPKey.computeThumbprint().toString());
+    }
+
+    @Test
+    void clientRegisteredForJwtAccessTokensIsRefusedAToken() throws Exception {
+        String codeVerifier = "test-code-verifier-jwt-client-0123456789-0123456789-abcdef";
+        String code = obtainAuthorizationCode(JWT_CLIENT_ID, codeVerifier, null);
+
+        RSAKey dPoPKey = new RSAKeyGenerator(2048)
+                .keyUse(KeyUse.SIGNATURE)
+                .algorithm(JWSAlgorithm.PS256)
+                .keyID(UUID.randomUUID().toString())
+                .generate();
+
+        MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
+        body.add("grant_type", "authorization_code");
+        body.add("code", code);
+        body.add("redirect_uri", REDIRECT_URI);
+        body.add("code_verifier", codeVerifier);
+        body.add("client_id", JWT_CLIENT_ID);
+        body.add("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer");
+        body.add("client_assertion", signedClientAssertion(JWT_CLIENT_ID, tokenEndpoint));
+
+        String errorResponseJson = mockMvc.perform(post("/oauth2/token")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .header("DPoP", dPoPProof(tokenEndpoint, "POST", dPoPKey))
+                        .params(body))
+                .andExpect(status().is4xxClientError())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(JsonPath.<String>read(errorResponseJson, "$.error")).isEqualTo("server_error");
+        assertThat(errorResponseJson).doesNotContain("access_token");
     }
 
     @Test
@@ -250,6 +278,27 @@ class DPoPTokenBindingTest extends AbstractIntegrationTest {
                 .andExpect(status().isBadRequest());
     }
 
+    private void registerClient(String clientId, OAuth2TokenFormat accessTokenFormat) {
+        if (registeredClientRepository.findByClientId(clientId) != null) return;
+
+        registeredClientRepository.save(RegisteredClient.withId(UUID.randomUUID().toString())
+                .clientId(clientId)
+                .clientAuthenticationMethod(ClientAuthenticationMethod.PRIVATE_KEY_JWT)
+                .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
+                .redirectUri(REDIRECT_URI)
+                .clientSettings(ClientSettings.builder()
+                        .requireProofKey(true)
+                        .requireAuthorizationConsent(false)
+                        .jwkSetUrl("http://localhost:" + jwksServer.getAddress().getPort() + "/jwks")
+                        .tokenEndpointAuthenticationSigningAlgorithm(SignatureAlgorithm.PS256)
+                        .build())
+                .tokenSettings(TokenSettings.builder()
+                        .accessTokenFormat(accessTokenFormat)
+                        .authorizationCodeTimeToLive(Duration.ofSeconds(60))
+                        .build())
+                .build());
+    }
+
     private String dPoPProof(String htu, String htm, RSAKey dPoPKey) throws Exception {
         JWTClaimsSet claims = new JWTClaimsSet.Builder()
                 .claim("htm", htm)
@@ -275,9 +324,13 @@ class DPoPTokenBindingTest extends AbstractIntegrationTest {
     }
 
     private String obtainAuthorizationCode(String codeVerifier, String dpopJkt) throws Exception {
+        return obtainAuthorizationCode(TEST_CLIENT_ID, codeVerifier, dpopJkt);
+    }
+
+    private String obtainAuthorizationCode(String clientId, String codeVerifier, String dpopJkt) throws Exception {
         MultiValueMap<String, String> parBody = new LinkedMultiValueMap<>();
         parBody.add("response_type", "code");
-        parBody.add("client_id", TEST_CLIENT_ID);
+        parBody.add("client_id", clientId);
         parBody.add("redirect_uri", REDIRECT_URI);
         parBody.add("code_challenge", codeChallenge(codeVerifier));
         parBody.add("code_challenge_method", "S256");
@@ -285,7 +338,7 @@ class DPoPTokenBindingTest extends AbstractIntegrationTest {
             parBody.add("dpop_jkt", dpopJkt);
         }
         parBody.add("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer");
-        parBody.add("client_assertion", signedClientAssertion(parEndpoint));
+        parBody.add("client_assertion", signedClientAssertion(clientId, parEndpoint));
 
         String parResponseJson = mockMvc.perform(post("/oauth2/par")
                         .contentType(MediaType.APPLICATION_FORM_URLENCODED)
@@ -296,7 +349,7 @@ class DPoPTokenBindingTest extends AbstractIntegrationTest {
         String requestUri = JsonPath.read(parResponseJson, "$.request_uri");
 
         URI authorizeUri = UriComponentsBuilder.fromPath("/oauth2/authorize")
-                .queryParam("client_id", TEST_CLIENT_ID)
+                .queryParam("client_id", clientId)
                 .queryParam("request_uri", requestUri)
                 .build()
                 .encode()
@@ -326,11 +379,15 @@ class DPoPTokenBindingTest extends AbstractIntegrationTest {
     }
 
     private String signedClientAssertion(String audience) throws Exception {
+        return signedClientAssertion(TEST_CLIENT_ID, audience);
+    }
+
+    private String signedClientAssertion(String clientId, String audience) throws Exception {
         Instant now = Instant.now();
 
         JWTClaimsSet claims = new JWTClaimsSet.Builder()
-                .issuer(TEST_CLIENT_ID)
-                .subject(TEST_CLIENT_ID)
+                .issuer(clientId)
+                .subject(clientId)
                 .audience(audience)
                 .issueTime(Date.from(now))
                 .expirationTime(Date.from(now.plusSeconds(60)))

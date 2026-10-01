@@ -39,11 +39,6 @@ public class AuthorizationServerClientBootstrapConfig {
                 return;
             }
 
-            /* FIXME: placeholder URL — once the gateway service exists it will be the one
-                authenticating here via private_key_jwt and hosting the real JWKS endpoint.
-                Until then this client is only reachable from tests that stand up their own\
-                local JWKS server. */
-
             RegisteredClient registeredClient = RegisteredClient.withId(UUID.randomUUID().toString())
                     .clientId(clientId)
                     .clientAuthenticationMethod(ClientAuthenticationMethod.PRIVATE_KEY_JWT)
@@ -59,7 +54,7 @@ public class AuthorizationServerClientBootstrapConfig {
                             .tokenEndpointAuthenticationSigningAlgorithm(SignatureAlgorithm.PS256)
                             .build())
                     .tokenSettings(TokenSettings.builder()
-                            .accessTokenFormat(OAuth2TokenFormat.SELF_CONTAINED)
+                            .accessTokenFormat(OAuth2TokenFormat.REFERENCE)
                             .accessTokenTimeToLive(Duration.ofMinutes(5))
                             .authorizationCodeTimeToLive(Duration.ofSeconds(60))
                             .refreshTokenTimeToLive(Duration.ofDays(30))
