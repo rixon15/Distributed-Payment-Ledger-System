@@ -36,5 +36,8 @@ public abstract class AbstractIntegrationTest {
 
         registry.add("aws.kms.endpoint", () -> LOCALSTACK_CONTAINER.getEndpoint().toString());
         registry.add("aws.region", LOCALSTACK_CONTAINER::getRegion);
+
+        // MockMvc requests arrive as http://localhost, and a DPoP proof's htu must match the token endpoint
+        registry.add("authorization-server.issuer", () -> "http://localhost");
     }
 }
