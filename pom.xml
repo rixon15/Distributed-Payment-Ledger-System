@@ -16,6 +16,7 @@
         <module>authorization-service</module>
         <module>gateway-service</module>
         <module>grpc-contracts</module>
+        <module>auth-starter</module>
     </modules>
 
     <properties>

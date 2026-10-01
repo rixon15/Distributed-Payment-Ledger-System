@@ -1,0 +1,95 @@
+name: Push checks
+
+# Fast lane for feature-branch pushes: only the modules a push changed (plus their dependents), and only tests that
+# don't need Docker. The full suite in ci.yml runs on the PR and is the merge gate.
+on:
+  push:
+    branches:
+      - feature/**
+      - bugfix/**
+      - hotfix/**
+      - fix/**
+
+concurrency:
+  group: push-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The diff needs the push's base commit, and main for a branch's first push
+          fetch-depth: 0
+
+      - name: Select modules
+        id: plan
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # A branch's first push has no 'before' (all zeros), and a force push can leave it unreachable;
+          # both fall back to the branch's fork point from main
+          base="$BEFORE"
+          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base=$(git merge-base origin/main HEAD 2>/dev/null || true)
+          fi
+
+          matrix=$(python3 .github/scripts/affected_modules.py "$base" HEAD)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+          echo "Base: ${base:-<none, testing every module>}"
+          echo "Matrix: $matrix"
+
+          # A skipped matrix job never expands its name, so say why on the run's summary page
+          if [[ "$matrix" == "[]" ]]; then
+            echo "No module changes since \`${base:0:7}\`; nothing to test." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Testing: $(jq -r 'map(.module) | join(", ")' <<< "$matrix")" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  test:
+    name: Fast (${{ matrix.module }})
+    needs: plan
+    if: needs.plan.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: corretto
+          cache: maven
+
+      - name: Build dependencies
+        run: ./mvnw -B -ntp -pl "${{ matrix.module }}" -am install -DskipTests
+
+      # Stops at 'test', so the JaCoCo gate (bound to verify) doesn't judge a partial run
+      - name: ${{ matrix.goal == 'test' && 'Unit tests' || 'Compile tests' }}
+        env:
+          MODULE: ${{ matrix.module }}
+          GOAL: ${{ matrix.goal }}
+          TESTS: ${{ matrix.tests }}
+        run: |
+          args=(-B -ntp -pl "$MODULE" "$GOAL")
+          [[ -n "$TESTS" ]] && args+=("-Dtest=$TESTS")
+          ./mvnw "${args[@]}"
