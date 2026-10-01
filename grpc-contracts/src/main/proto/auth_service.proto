@@ -8,8 +8,11 @@ option java_multiple_files = true;
 import "google/protobuf/timestamp.proto";
 
 service AuthService {
-  /* Exchange an opaque DPoP bound client token for the real, claims bearing access token. Called by t he gateway only
-     on a phantom token cache miss. */
+  /* Exchange an opaque, DPoP bound client token for a short lived internal JWT that one internal service accepts.
+     Called by the gateway only on a phantom token cache miss, once per (token, resource) pair.
+
+     An unknown resource is a caller bug, not a property of the token, so it fails the call with INVALID_ARGUMENT
+     instead of returning InvalidToken. */
   rpc ExchangeToken(TokenExchangeRequest) returns (TokenExchangeResponse);
 }
 
@@ -19,6 +22,9 @@ message TokenExchangeRequest {
      opaque_token and the proof's signature against 'cnf.jkt'. htm/htu are NOT validated here, they bind the proof
      to the original HTTP request, which only the gateway sees ever. */
   string dpop_proof = 2;
+  /* The internal service the token is for, e.g. "ledger-service" (same idea as the RFC 8707 resource parameter).
+     It becomes the only 'aud' of the issued JWT, so a token minted for one service is rejected by every other one. */
+  string resource = 3;
 }
 
 message TokenExchangeResponse {
@@ -33,8 +39,8 @@ message ResolvedToken {
   /* JWK thumbprint the token is DPoP-bound to cnf.jkt. Cached by the
      gateway alongside access_token so cache hits can validate DPoP locally. */
   string cnf_jkt = 2;
-  /* Real expiry of access_token - drives the gateway's cache TTL directly
-     instead of a fixed 30-60s constant, so the cache can never outlive the token */
+  /* Expiry of access_token, the internal JWT. It is short, and never later than the expiry of the opaque token it
+     was exchanged for, so the gateway can cache until this instant without outliving either token. */
   google.protobuf.Timestamp expires_at = 3;
 }
 
